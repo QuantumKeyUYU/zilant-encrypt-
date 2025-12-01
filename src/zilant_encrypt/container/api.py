@@ -190,6 +190,9 @@ def decrypt_file(
     if header.key_mode != KEY_MODE_PASSWORD_ONLY:
         raise UnsupportedFeatureError("Only password-only containers supported in MVP")
 
+    if header.wrapped_key_len != 32:
+        raise ContainerFormatError("Unexpected wrapped key length")
+
     if len(body) < TAG_LEN:
         raise ContainerFormatError("Container missing authentication tag")
 

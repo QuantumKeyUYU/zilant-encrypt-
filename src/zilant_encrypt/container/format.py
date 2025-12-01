@@ -141,8 +141,14 @@ def parse_header(data: bytes) -> ContainerHeader:
     if key_mode != KEY_MODE_PASSWORD_ONLY:
         raise UnsupportedFeatureError("Only password-based containers are supported")
 
+    if header_flags != 0:
+        raise UnsupportedFeatureError("Header flags set for unsupported features")
+
     if not (0 <= wrapped_key_len <= WRAPPED_KEY_MAX_LEN):
         raise ContainerFormatError("Invalid wrapped_key_len")
+
+    if any(reserved):
+        raise UnsupportedFeatureError("Reserved header bytes are non-zero")
 
     wrapped_key = wrapped_key_padded[:wrapped_key_len]
 
