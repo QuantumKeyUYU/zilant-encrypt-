@@ -8,7 +8,6 @@ from zilant_encrypt.container.format import (
 )
 from zilant_encrypt.errors import ContainerFormatError, UnsupportedFeatureError
 
-
 PAYLOAD_SIZE = 1024
 
 

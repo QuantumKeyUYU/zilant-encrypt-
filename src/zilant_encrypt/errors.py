@@ -1,5 +1,6 @@
 """Custom exceptions for Zilant Encrypt."""
 
+
 class ZilantEncryptError(Exception):
     """Base exception for Zilant Encrypt."""
 

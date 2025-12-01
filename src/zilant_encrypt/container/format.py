@@ -25,6 +25,7 @@ _HEADER_STRUCT = Struct(
     "<6sBBH16sIII12sH32s16s28s",
 )  # totals 128 bytes
 
+
 @dataclass(frozen=True)
 class ContainerHeader:
     key_mode: int

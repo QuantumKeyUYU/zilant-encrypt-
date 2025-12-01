@@ -17,8 +17,6 @@ class AesGcmEncryptor:
         return ciphertext_with_tag[:-TAG_LEN], ciphertext_with_tag[-TAG_LEN:]
 
     @staticmethod
-    def decrypt(
-        key: bytes, nonce: bytes, ciphertext: bytes, tag: bytes, aad: bytes
-    ) -> bytes:
+    def decrypt(key: bytes, nonce: bytes, ciphertext: bytes, tag: bytes, aad: bytes) -> bytes:
         aesgcm = AESGCM(key)
         return aesgcm.decrypt(nonce, ciphertext + tag, aad)

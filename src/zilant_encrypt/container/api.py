@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
-from pathlib import Path
 import shutil
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 from types import TracebackType
 from typing import Optional, Protocol, Type, runtime_checkable
 
@@ -19,7 +19,7 @@ from zilant_encrypt.container.format import (
     header_aad,
     parse_header,
 )
-from zilant_encrypt.crypto.aead import AesGcmEncryptor, TAG_LEN
+from zilant_encrypt.crypto.aead import TAG_LEN, AesGcmEncryptor
 from zilant_encrypt.crypto.kdf import Argon2Params, derive_key_from_password, recommended_params
 from zilant_encrypt.errors import (
     ContainerFormatError,
