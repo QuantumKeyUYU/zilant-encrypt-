@@ -46,9 +46,7 @@ def encrypt(input_path: Path, output_path: Path, password_opt: str | None, overw
 @click.argument("output_path", required=False, type=click.Path(path_type=Path))
 @click.option("--password", "password_opt", help="Decryption password")
 @click.option("--overwrite/--no-overwrite", default=False, help="Overwrite output if exists")
-def decrypt(
-    container: Path, output_path: Path | None, password_opt: str | None, overwrite: bool
-) -> None:
+def decrypt(container: Path, output_path: Path | None, password_opt: str | None, overwrite: bool) -> None:
     """Decrypt CONTAINER into OUTPUT (defaults to <container>.out)."""
 
     password = password_opt or _prompt_password()
@@ -86,8 +84,7 @@ def info(container: Path) -> None:
     console.print("Version: 1")
     console.print(f"Key mode: {header.key_mode}")
     console.print(
-        f"Argon2id: mem={header.argon_mem_cost} KiB, "
-        f"time={header.argon_time_cost}, p={header.argon_parallelism}",
+        f"Argon2id: mem={header.argon_mem_cost} KiB, " f"time={header.argon_time_cost}, p={header.argon_parallelism}",
     )
     payload_size = max(len(data) - HEADER_LEN, 0)
     console.print(f"Encrypted payload size: ~{payload_size} bytes")
