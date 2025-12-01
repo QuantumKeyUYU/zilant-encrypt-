@@ -24,17 +24,17 @@ def main() -> None:
 
 
 @main.command()
-@click.argument("input", type=click.Path(exists=True, path_type=Path))
-@click.argument("output", type=click.Path(path_type=Path))
+@click.argument("input_path", type=click.Path(exists=True, path_type=Path))
+@click.argument("output_path", type=click.Path(path_type=Path))
 @click.option("--password", "password_opt", help="Encryption password")
 @click.option("--overwrite/--no-overwrite", default=False, help="Overwrite output if exists")
-def encrypt(input: Path, output: Path, password_opt: str | None, overwrite: bool) -> None:
+def encrypt(input_path: Path, output_path: Path, password_opt: str | None, overwrite: bool) -> None:
     """Encrypt INPUT into OUTPUT container."""
 
     password = password_opt or _prompt_password()
 
     try:
-        api.encrypt_file(input, output, password, overwrite=overwrite)
+        api.encrypt_file(input_path, output_path, password, overwrite=overwrite)
     except FileExistsError as exc:
         console.print(f"[red]Error:[/red] {exc}")
     except Exception as exc:  # noqa: BLE001
@@ -43,14 +43,14 @@ def encrypt(input: Path, output: Path, password_opt: str | None, overwrite: bool
 
 @main.command()
 @click.argument("container", type=click.Path(exists=True, path_type=Path))
-@click.argument("output", required=False, type=click.Path(path_type=Path))
+@click.argument("output_path", required=False, type=click.Path(path_type=Path))
 @click.option("--password", "password_opt", help="Decryption password")
 @click.option("--overwrite/--no-overwrite", default=False, help="Overwrite output if exists")
-def decrypt(container: Path, output: Path | None, password_opt: str | None, overwrite: bool) -> None:
+def decrypt(container: Path, output_path: Path | None, password_opt: str | None, overwrite: bool) -> None:
     """Decrypt CONTAINER into OUTPUT (defaults to <container>.out)."""
 
     password = password_opt or _prompt_password()
-    out_path = output or container.with_suffix(container.suffix + ".out")
+    out_path = output_path or container.with_suffix(container.suffix + ".out")
 
     try:
         api.decrypt_file(container, out_path, password, overwrite=overwrite)
@@ -84,7 +84,8 @@ def info(container: Path) -> None:
     console.print("Version: 1")
     console.print(f"Key mode: {header.key_mode}")
     console.print(
-        f"Argon2id: mem={header.argon_mem_cost} KiB, time={header.argon_time_cost}, p={header.argon_parallelism}"
+        f"Argon2id: mem={header.argon_mem_cost} KiB, "
+        f"time={header.argon_time_cost}, p={header.argon_parallelism}"
     )
     payload_size = max(len(data) - HEADER_LEN, 0)
     console.print(f"Encrypted payload size: ~{payload_size} bytes")

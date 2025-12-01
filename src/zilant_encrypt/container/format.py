@@ -13,8 +13,16 @@ HEADER_LEN = 128
 KEY_MODE_PASSWORD_ONLY = 0
 KEY_MODE_PQ_HYBRID = 1
 
+MAGIC_LEN = 6
+VERSION_LEN = 1
+SALT_LEN = 16
+NONCE_LEN = 12
+WRAPPED_KEY_MAX_LEN = 32
+WRAPPED_KEY_TAG_LEN = 16
+RESERVED_LEN = 28
+
 _HEADER_STRUCT = Struct(
-    "<6sBBH16sIII12sH32s16s28s"
+    "<6sBBH16sIII12sH32s16s28s",
 )  # totals 128 bytes
 
 @dataclass(frozen=True)
@@ -45,7 +53,8 @@ class ContainerHeader:
             reserved=self.reserved,
         )
 
-def build_header(
+
+def build_header(  # noqa: PLR0913
     *,
     key_mode: int,
     header_flags: int,
@@ -60,16 +69,16 @@ def build_header(
 ) -> bytes:
     """Build container header bytes."""
 
-    if len(salt_argon2) != 16:
+    if len(salt_argon2) != SALT_LEN:
         raise ContainerFormatError("salt_argon2 must be 16 bytes")
-    if len(nonce_aes_gcm) != 12:
+    if len(nonce_aes_gcm) != NONCE_LEN:
         raise ContainerFormatError("nonce_aes_gcm must be 12 bytes")
-    if len(wrapped_key) > 32:
+    if len(wrapped_key) > WRAPPED_KEY_MAX_LEN:
         raise ContainerFormatError("wrapped_key must be at most 32 bytes")
-    if len(wrapped_key_tag) != 16:
+    if len(wrapped_key_tag) != WRAPPED_KEY_TAG_LEN:
         raise ContainerFormatError("wrapped_key_tag must be 16 bytes")
-    reserved_bytes = reserved if reserved is not None else bytes(28)
-    if len(reserved_bytes) != 28:
+    reserved_bytes = reserved if reserved is not None else bytes(RESERVED_LEN)
+    if len(reserved_bytes) != RESERVED_LEN:
         raise ContainerFormatError("reserved must be 28 bytes")
 
     if key_mode not in (KEY_MODE_PASSWORD_ONLY, KEY_MODE_PQ_HYBRID):
@@ -131,7 +140,7 @@ def parse_header(data: bytes) -> ContainerHeader:
     if key_mode != KEY_MODE_PASSWORD_ONLY:
         raise UnsupportedFeatureError("Only password-based containers are supported")
 
-    if not (0 <= wrapped_key_len <= 32):
+    if not (0 <= wrapped_key_len <= WRAPPED_KEY_MAX_LEN):
         raise ContainerFormatError("Invalid wrapped_key_len")
 
     wrapped_key = wrapped_key_padded[:wrapped_key_len]
@@ -156,4 +165,4 @@ def header_aad(header_bytes: bytes) -> bytes:
 
     if len(header_bytes) != HEADER_LEN:
         raise ContainerFormatError("Header must be fully formed")
-    return header_bytes[len(MAGIC) + 1 :]
+    return header_bytes[MAGIC_LEN + VERSION_LEN :]

@@ -7,7 +7,8 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Protocol, runtime_checkable
+from types import TracebackType
+from typing import Optional, Protocol, Type, runtime_checkable
 
 from cryptography.exceptions import InvalidTag
 
@@ -94,9 +95,15 @@ class _PayloadSource:
             self.path = archive_path
         return self.path
 
-    def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[override]
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> bool:
         if self.temp_dir:
             self.temp_dir.cleanup()
+        return False
 
 
 class _PasswordOnlyProviderFactory:
@@ -195,10 +202,18 @@ def decrypt_file(
     )
     provider = PasswordKeyProvider(password, header.salt_argon2, params)
 
-    file_key = provider.unwrap_file_key(WrappedKey(data=header.wrapped_file_key, tag=header.wrapped_key_tag))
+    file_key = provider.unwrap_file_key(
+        WrappedKey(data=header.wrapped_file_key, tag=header.wrapped_key_tag),
+    )
 
     try:
-        plaintext = AesGcmEncryptor.decrypt(file_key, header.nonce_aes_gcm, ciphertext, tag, aad)
+        plaintext = AesGcmEncryptor.decrypt(
+            file_key,
+            header.nonce_aes_gcm,
+            ciphertext,
+            tag,
+            aad,
+        )
     except InvalidTag as exc:
         raise IntegrityError("Container failed integrity check") from exc
 
