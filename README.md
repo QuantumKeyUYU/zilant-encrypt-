@@ -1,2 +1,2 @@
-# zilant-encrypt-
+# zilant-encrypt
 Zilant Encrypt — постквантовые контейнеры для файлов.
