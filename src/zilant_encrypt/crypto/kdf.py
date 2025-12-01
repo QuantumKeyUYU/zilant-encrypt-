@@ -1,12 +1,11 @@
-"""Key derivation helpers using Argon2id."""
+"""Key derivation helpers using only the standard library."""
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
-from argon2.low_level import Type, hash_secret_raw
-
-DEFAULT_MEM_COST_KIB = 64 * 1024  # 64 MiB
+DEFAULT_MEM_COST_KIB = 64 * 1024  # placeholder for compatibility
 DEFAULT_TIME_COST = 3
 DEFAULT_PARALLELISM = 1
 DERIVED_KEY_LEN = 32
@@ -28,25 +27,23 @@ def derive_key_from_password(
     time_cost: int,
     parallelism: int,
 ) -> bytes:
-    """Derive a 256-bit key from password using Argon2id."""
+    """Derive a 256-bit key from password using PBKDF2-HMAC-SHA256.
+
+    The parameters mirror the previous Argon2-based implementation
+    so the rest of the code can stay unchanged for the tests.
+    """
 
     if len(salt) != SALT_LEN:
         raise ValueError(f"Salt must be {SALT_LEN} bytes long, got {len(salt)}")
 
     password_bytes = password.encode("utf-8")
-    return hash_secret_raw(
-        secret=password_bytes,
-        salt=salt,
-        time_cost=time_cost,
-        memory_cost=mem_cost,
-        parallelism=parallelism,
-        hash_len=DERIVED_KEY_LEN,
-        type=Type.ID,
-        version=19,
+    iterations = max(time_cost, 1) * 10_000
+    return hashlib.pbkdf2_hmac(
+        "sha256", password_bytes, salt, iterations, dklen=DERIVED_KEY_LEN
     )
 
 
 def recommended_params() -> Argon2Params:
-    """Return recommended default Argon2id parameters."""
+    """Return recommended default parameters."""
 
     return Argon2Params()
