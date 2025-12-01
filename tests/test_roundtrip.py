@@ -3,9 +3,11 @@ from pathlib import Path
 
 from zilant_encrypt.container.api import decrypt_file, encrypt_file
 
+PAYLOAD_SIZE = 1024
+
 
 def test_roundtrip(tmp_path: Path) -> None:
-    data = os.urandom(1024)
+    data = os.urandom(PAYLOAD_SIZE)
     source = tmp_path / "source.bin"
     source.write_bytes(data)
 
