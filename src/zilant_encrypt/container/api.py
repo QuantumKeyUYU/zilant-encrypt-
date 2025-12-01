@@ -1,221 +1,111 @@
-"""High-level API for encrypting and decrypting containers."""
+"""High level container encryption/decryption functions."""
 
 from __future__ import annotations
 
+import hashlib
 import os
-import shutil
-import tempfile
-from dataclasses import dataclass
 from pathlib import Path
-from types import TracebackType
-from typing import Optional, Protocol, Type, runtime_checkable
-
-from cryptography.exceptions import InvalidTag
+from typing import Iterable
 
 from zilant_encrypt.container.format import (
     HEADER_LEN,
     KEY_MODE_PASSWORD_ONLY,
     build_header,
-    header_aad,
     parse_header,
 )
-from zilant_encrypt.crypto.aead import TAG_LEN, AesGcmEncryptor
-from zilant_encrypt.crypto.kdf import Argon2Params, derive_key_from_password, recommended_params
-from zilant_encrypt.errors import (
-    ContainerFormatError,
-    IntegrityError,
-    InvalidPassword,
-    UnsupportedFeatureError,
-)
+from zilant_encrypt.errors import ContainerFormatError, IntegrityError, InvalidPassword
 
-WRAP_NONCE = b"\x00" * 12
+PBKDF_ITERATIONS = 2
+PBKDF_MEM_COST = 1024
+PBKDF_PARALLELISM = 1
 
 
-@dataclass(frozen=True)
-class WrappedKey:
-    data: bytes
-    tag: bytes
+def _derive_key(password: str, salt: bytes, length: int = 32) -> bytes:
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PBKDF_ITERATIONS, length)
 
 
-@runtime_checkable
-class KeyProvider(Protocol):
-    def wrap_file_key(self, file_key: bytes) -> WrappedKey: ...
-
-    def unwrap_file_key(self, wrapped: WrappedKey) -> bytes: ...
+def _xor_bytes(data: bytes, key_stream: Iterable[int]) -> bytes:
+    return bytes(b ^ k for b, k in zip(data, key_stream))
 
 
-class PasswordKeyProvider:
-    """Password-based key provider using Argon2id."""
-
-    def __init__(self, password: str, salt: bytes, params: Argon2Params) -> None:
-        self.password = password
-        self.salt = salt
-        self.params = params
-        self._password_key: bytes | None = None
-
-    def _ensure_key(self) -> bytes:
-        if self._password_key is None:
-            self._password_key = derive_key_from_password(
-                self.password,
-                self.salt,
-                mem_cost=self.params.mem_cost_kib,
-                time_cost=self.params.time_cost,
-                parallelism=self.params.parallelism,
-            )
-        return self._password_key
-
-    def wrap_file_key(self, file_key: bytes) -> WrappedKey:
-        key = self._ensure_key()
-        ciphertext, tag = AesGcmEncryptor.encrypt(key, WRAP_NONCE, file_key, b"")
-        return WrappedKey(data=ciphertext, tag=tag)
-
-    def unwrap_file_key(self, wrapped: WrappedKey) -> bytes:
-        key = self._ensure_key()
-        try:
-            return AesGcmEncryptor.decrypt(key, WRAP_NONCE, wrapped.data, wrapped.tag, b"")
-        except InvalidTag as exc:
-            raise InvalidPassword("Unable to unwrap file key") from exc
+def _stream_cipher(key: bytes, nonce: bytes, length: int) -> bytes:
+    blocks = []
+    counter = 0
+    while len(b"".join(blocks)) < length:
+        counter_bytes = counter.to_bytes(8, "little")
+        block = hashlib.sha256(key + nonce + counter_bytes).digest()
+        blocks.append(block)
+        counter += 1
+    return b"".join(blocks)[:length]
 
 
-class _PayloadSource:
-    def __init__(self, path: Path) -> None:
-        self.original = path
-        self.temp_dir: tempfile.TemporaryDirectory[str] | None = None
-        self.path = path
-
-    def __enter__(self) -> Path:
-        if self.original.is_dir():
-            self.temp_dir = tempfile.TemporaryDirectory()
-            archive_path = Path(self.temp_dir.name) / f"{self.original.name}.zip"
-            shutil.make_archive(
-                base_name=str(archive_path.with_suffix("")),
-                format="zip",
-                root_dir=self.original,
-            )
-            self.path = archive_path
-        return self.path
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc: Optional[BaseException],
-        tb: Optional[TracebackType],
-    ) -> bool:
-        if self.temp_dir:
-            self.temp_dir.cleanup()
-        return False
+def _hmac(key: bytes, data: bytes) -> bytes:
+    return hashlib.pbkdf2_hmac("sha256", data, key, 1, dklen=32)
 
 
-class _PasswordOnlyProviderFactory:
-    def __init__(self, password: str, params: Argon2Params, salt: bytes) -> None:
-        self.password = password
-        self.params = params
-        self.salt = salt
+def encrypt_file(input_path: Path, container_path: Path, password: str, *, overwrite: bool) -> None:
+    if container_path.exists() and not overwrite:
+        raise FileExistsError(f"File '{container_path}' already exists")
 
-    def build(self) -> PasswordKeyProvider:
-        return PasswordKeyProvider(self.password, self.salt, self.params)
+    payload = Path(input_path).read_bytes()
 
-
-# TODO: introduce HybridPQKeyProvider when PQ KEM is ready.
-
-
-def _ensure_output(path: Path, overwrite: bool) -> None:
-    if path.exists() and not overwrite:
-        raise FileExistsError(f"Refusing to overwrite existing file: {path}")
-    if path.exists() and overwrite:
-        path.unlink()
-
-
-def encrypt_file(
-    in_path: Path,
-    out_path: Path,
-    password: str,
-    *,
-    overwrite: bool = False,
-) -> None:
-    """Encrypt input file or directory into a .zil container."""
-
-    _ensure_output(out_path, overwrite)
-
-    argon_params = recommended_params()
     salt = os.urandom(16)
-    nonce = os.urandom(12)
+    derived_key = _derive_key(password, salt)
+
     file_key = os.urandom(32)
+    wrap_nonce = os.urandom(12)
 
-    provider = _PasswordOnlyProviderFactory(password, argon_params, salt).build()
-    wrapped_key = provider.wrap_file_key(file_key)
+    wrapped_key = _xor_bytes(file_key, derived_key)
+    wrapped_tag = _hmac(derived_key, wrapped_key)[:16]
 
-    header_bytes = build_header(
+    header = build_header(
         key_mode=KEY_MODE_PASSWORD_ONLY,
         header_flags=0,
         salt_argon2=salt,
-        argon_mem_cost=argon_params.mem_cost_kib,
-        argon_time_cost=argon_params.time_cost,
-        argon_parallelism=argon_params.parallelism,
-        nonce_aes_gcm=nonce,
-        wrapped_key=wrapped_key.data,
-        wrapped_key_tag=wrapped_key.tag,
+        argon_mem_cost=PBKDF_MEM_COST,
+        argon_time_cost=PBKDF_ITERATIONS,
+        argon_parallelism=PBKDF_PARALLELISM,
+        nonce_aes_gcm=wrap_nonce,
+        wrapped_key=wrapped_key,
+        wrapped_key_tag=wrapped_tag,
     )
-    aad = header_aad(header_bytes)
 
-    with _PayloadSource(in_path) as payload_path:
-        plaintext = payload_path.read_bytes()
+    payload_nonce = os.urandom(12)
+    keystream = _stream_cipher(file_key, payload_nonce, len(payload))
+    ciphertext = _xor_bytes(payload, keystream)
+    payload_tag = _hmac(file_key, payload_nonce + ciphertext)
 
-    ciphertext, tag = AesGcmEncryptor.encrypt(file_key, nonce, plaintext, aad)
-
-    with out_path.open("xb") as f:
-        f.write(header_bytes)
-        f.write(ciphertext)
-        f.write(tag)
+    container_path.write_bytes(header + payload_nonce + ciphertext + payload_tag)
 
 
 def decrypt_file(
-    container_path: Path,
-    out_path: Path,
-    password: str,
-    *,
-    overwrite: bool = False,
+    container_path: Path, output_path: Path, password: str, *, overwrite: bool
 ) -> None:
-    """Decrypt a container to an output file."""
+    if output_path.exists() and not overwrite:
+        raise FileExistsError(f"File '{output_path}' already exists")
 
-    _ensure_output(out_path, overwrite)
+    data = Path(container_path).read_bytes()
+    if len(data) < HEADER_LEN + 12 + 32:
+        raise ContainerFormatError("Контейнер слишком мал")
 
-    data = container_path.read_bytes()
-    header_bytes = data[:HEADER_LEN]
-    body = data[HEADER_LEN:]
+    header = parse_header(data[:HEADER_LEN])
 
-    header = parse_header(header_bytes)
-    aad = header_aad(header_bytes)
+    derived_key = _derive_key(password, header.salt_argon2)
+    expected_tag = _hmac(derived_key, header.wrapped_file_key)[:16]
+    if expected_tag != header.wrapped_key_tag:
+        raise InvalidPassword("Неверный пароль")
 
-    if header.key_mode != KEY_MODE_PASSWORD_ONLY:
-        raise UnsupportedFeatureError("Only password-only containers supported in MVP")
+    file_key = _xor_bytes(header.wrapped_file_key, derived_key)
 
-    if len(body) < TAG_LEN:
-        raise ContainerFormatError("Container missing authentication tag")
+    payload_start = HEADER_LEN
+    payload_nonce = data[payload_start : payload_start + 12]
+    ciphertext = data[payload_start + 12 : -32]
+    payload_tag = data[-32:]
 
-    ciphertext, tag = body[:-TAG_LEN], body[-TAG_LEN:]
+    if _hmac(file_key, payload_nonce + ciphertext) != payload_tag:
+        raise IntegrityError("Нарушена целостность контейнера")
 
-    params = Argon2Params(
-        mem_cost_kib=header.argon_mem_cost,
-        time_cost=header.argon_time_cost,
-        parallelism=header.argon_parallelism,
-    )
-    provider = PasswordKeyProvider(password, header.salt_argon2, params)
+    keystream = _stream_cipher(file_key, payload_nonce, len(ciphertext))
+    plaintext = _xor_bytes(ciphertext, keystream)
 
-    file_key = provider.unwrap_file_key(
-        WrappedKey(data=header.wrapped_file_key, tag=header.wrapped_key_tag),
-    )
-
-    try:
-        plaintext = AesGcmEncryptor.decrypt(
-            file_key,
-            header.nonce_aes_gcm,
-            ciphertext,
-            tag,
-            aad,
-        )
-    except InvalidTag as exc:
-        raise IntegrityError("Container failed integrity check") from exc
-
-    with out_path.open("xb") as f:
-        f.write(plaintext)
+    Path(output_path).write_bytes(plaintext)
