@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import click
-from rich.console import Console
+from rich.console import Console  # type: ignore[import-not-found]
 
 from zilant_encrypt.container import api
 from zilant_encrypt.container.format import HEADER_LEN, parse_header
@@ -15,7 +16,7 @@ console = Console()
 
 
 def _prompt_password() -> str:
-    return click.prompt("Password", hide_input=True, confirmation_prompt=True)
+    return cast(str, click.prompt("Password", hide_input=True, confirmation_prompt=True))
 
 
 @click.group()

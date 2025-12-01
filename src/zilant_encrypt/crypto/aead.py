@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from typing import cast
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # type: ignore[import-not-found]
 
 TAG_LEN = 16
 
@@ -13,10 +15,10 @@ class AesGcmEncryptor:
     @staticmethod
     def encrypt(key: bytes, nonce: bytes, plaintext: bytes, aad: bytes) -> tuple[bytes, bytes]:
         aesgcm = AESGCM(key)
-        ciphertext_with_tag = aesgcm.encrypt(nonce, plaintext, aad)
+        ciphertext_with_tag = cast(bytes, aesgcm.encrypt(nonce, plaintext, aad))
         return ciphertext_with_tag[:-TAG_LEN], ciphertext_with_tag[-TAG_LEN:]
 
     @staticmethod
     def decrypt(key: bytes, nonce: bytes, ciphertext: bytes, tag: bytes, aad: bytes) -> bytes:
         aesgcm = AESGCM(key)
-        return aesgcm.decrypt(nonce, ciphertext + tag, aad)
+        return cast(bytes, aesgcm.decrypt(nonce, ciphertext + tag, aad))

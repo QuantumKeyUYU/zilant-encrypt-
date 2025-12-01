@@ -29,5 +29,6 @@ zilenc info output.zil
 ## Тесты
 
 ```bash
+python -m pip install -e .[dev]
 pytest -q
 ```

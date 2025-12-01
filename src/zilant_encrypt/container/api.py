@@ -8,9 +8,9 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Optional, Protocol, Type, runtime_checkable
+from typing import Literal, Optional, Protocol, Type, runtime_checkable
 
-from cryptography.exceptions import InvalidTag
+from cryptography.exceptions import InvalidTag  # type: ignore[import-not-found]
 
 from zilant_encrypt.container.format import (
     HEADER_LEN,
@@ -100,7 +100,7 @@ class _PayloadSource:
         exc_type: Optional[Type[BaseException]],
         exc: Optional[BaseException],
         tb: Optional[TracebackType],
-    ) -> bool:
+    ) -> Literal[False]:
         if self.temp_dir:
             self.temp_dir.cleanup()
         return False
