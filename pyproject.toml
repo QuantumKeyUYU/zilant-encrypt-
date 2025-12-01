@@ -34,10 +34,18 @@ dev = [
 line-length = 100
 
 [tool.ruff]
+line-length = 120
 target-version = "py311"
-line-length = 100
-select = ["E", "F", "I", "B", "UP", "ANN", "Q", "A", "COM", "PL"]
-ignore = ["ANN101", "ANN102", "ANN401"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = [
+    "E501",   # длинные строки
+    "ANN",    # аннотации типов
+    "PLR",    # "магические числа", слишком много аргументов и т.п.
+    "A002",   # затенение builtin-ов (input и т.п.)
+    "COM812", # обязательные хвостовые запятые
+]
 
 [tool.isort]
 profile = "black"

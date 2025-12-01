@@ -81,7 +81,7 @@ def info(container: Path) -> None:
         return
 
     console.print("[bold]Zilant container[/bold]")
-    console.print(f"Version: 1")
+    console.print("Version: 1")
     console.print(f"Key mode: {header.key_mode}")
     console.print(
         f"Argon2id: mem={header.argon_mem_cost} KiB, time={header.argon_time_cost}, p={header.argon_parallelism}"

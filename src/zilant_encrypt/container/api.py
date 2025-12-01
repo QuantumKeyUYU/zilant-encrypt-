@@ -11,16 +11,20 @@ from typing import Protocol, runtime_checkable
 
 from cryptography.exceptions import InvalidTag
 
-from zilant_encrypt.crypto.aead import AesGcmEncryptor, TAG_LEN
-from zilant_encrypt.crypto.kdf import Argon2Params, derive_key_from_password, recommended_params
-from zilant_encrypt.errors import ContainerFormatError, IntegrityError, InvalidPassword
-from zilant_encrypt.errors import UnsupportedFeatureError
 from zilant_encrypt.container.format import (
     HEADER_LEN,
     KEY_MODE_PASSWORD_ONLY,
     build_header,
     header_aad,
     parse_header,
+)
+from zilant_encrypt.crypto.aead import AesGcmEncryptor, TAG_LEN
+from zilant_encrypt.crypto.kdf import Argon2Params, derive_key_from_password, recommended_params
+from zilant_encrypt.errors import (
+    ContainerFormatError,
+    IntegrityError,
+    InvalidPassword,
+    UnsupportedFeatureError,
 )
 
 WRAP_NONCE = b"\x00" * 12
