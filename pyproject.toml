@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "zilant-encrypt"
 version = "0.1.0"
 description = "Zilant Encrypt - secure container encryption utility"
-authors = [{name = "Zilant Team"}]
+authors = [{ name = "Zilant Team" }]
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -38,12 +38,14 @@ line-length = 120
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
+# E, F — обычные ошибки / варнинги.
+# I не включаем, чтобы Ruff не сортировал импорты и не бодался с isort.
+select = ["E", "F"]
 ignore = [
     "E501",   # длинные строки
     "ANN",    # аннотации типов
     "PLR",    # "магические числа", слишком много аргументов и т.п.
-    "A002",   # затенение builtin-ов (input и т.п.)
+    "A002",   # затенение builtin-ов
     "COM812", # обязательные хвостовые запятые
 ]
 
