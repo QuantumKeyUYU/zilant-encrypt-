@@ -62,3 +62,23 @@ def test_unsupported_key_mode() -> None:
 
     with pytest.raises(UnsupportedFeatureError):
         parse_header(bytes(header_bytes))
+
+
+def test_header_flags_not_supported() -> None:
+    """Любые выставленные флаги считаем неподдерживаемой функцией."""
+    header_bytes = bytearray(_build_sample_header())
+
+    # header_flags — двухбайтовое поле сразу после key_mode
+    header_bytes[8:10] = (1).to_bytes(2, "little")
+
+    with pytest.raises(UnsupportedFeatureError):
+        parse_header(bytes(header_bytes))
+
+
+def test_reserved_bytes_not_zero() -> None:
+    """Незаполненные нулями резервные байты считаем неподдерживаемыми."""
+    header_bytes = bytearray(_build_sample_header())
+    header_bytes[-1] = 1
+
+    with pytest.raises(UnsupportedFeatureError):
+        parse_header(bytes(header_bytes))

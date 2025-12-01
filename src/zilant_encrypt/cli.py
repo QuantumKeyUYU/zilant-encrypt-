@@ -9,7 +9,12 @@ from rich.console import Console
 
 from zilant_encrypt.container import api
 from zilant_encrypt.container.format import HEADER_LEN, parse_header
-from zilant_encrypt.errors import ContainerFormatError, IntegrityError, InvalidPassword
+from zilant_encrypt.errors import (
+    ContainerFormatError,
+    IntegrityError,
+    InvalidPassword,
+    UnsupportedFeatureError,
+)
 
 console = Console()
 
@@ -60,6 +65,8 @@ def decrypt(container: Path, output_path: Path | None, password_opt: str | None,
         console.print("[red]Контейнер повреждён[/red]")
     except FileExistsError as exc:
         console.print(f"[red]Error:[/red] {exc}")
+    except UnsupportedFeatureError as exc:
+        console.print(f"[red]Неподдерживаемая функция:[/red] {exc}")
     except ContainerFormatError as exc:
         console.print(f"[red]Ошибка формата контейнера:[/red] {exc}")
     except Exception as exc:  # noqa: BLE001
@@ -76,7 +83,7 @@ def info(container: Path) -> None:
 
     try:
         header = parse_header(header_bytes)
-    except ContainerFormatError as exc:
+    except (ContainerFormatError, UnsupportedFeatureError) as exc:
         console.print(f"[red]Ошибка формата контейнера:[/red] {exc}")
         return
 
