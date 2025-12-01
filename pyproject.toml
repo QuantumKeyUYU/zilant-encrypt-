@@ -50,6 +50,7 @@ ignore = [
 [tool.isort]
 profile = "black"
 line_length = 100
+case_sensitive = false
 
 [tool.pytest.ini_options]
 addopts = "-q"
