@@ -8,7 +8,7 @@ from zilant_encrypt.container.format import (
 )
 from zilant_encrypt.errors import ContainerFormatError, UnsupportedFeatureError
 
-PAYLOAD_SIZE = 1024
+ARGON_MEM_COST = 1024
 
 
 def test_build_and_parse_header() -> None:
@@ -16,7 +16,7 @@ def test_build_and_parse_header() -> None:
         key_mode=KEY_MODE_PASSWORD_ONLY,
         header_flags=0,
         salt_argon2=b"\x01" * 16,
-        argon_mem_cost=PAYLOAD_SIZE,
+        argon_mem_cost=ARGON_MEM_COST,
         argon_time_cost=2,
         argon_parallelism=1,
         nonce_aes_gcm=b"\x02" * 12,
@@ -28,7 +28,7 @@ def test_build_and_parse_header() -> None:
 
     parsed = parse_header(header_bytes)
     assert parsed.salt_argon2 == b"\x01" * 16
-    assert parsed.argon_mem_cost == PAYLOAD_SIZE
+    assert parsed.argon_mem_cost == ARGON_MEM_COST
     assert parsed.nonce_aes_gcm == b"\x02" * 12
     assert parsed.wrapped_file_key == b"\x03" * 32
     assert parsed.wrapped_key_tag == b"\x04" * 16
@@ -40,7 +40,7 @@ def test_invalid_magic() -> None:
             key_mode=KEY_MODE_PASSWORD_ONLY,
             header_flags=0,
             salt_argon2=b"\x01" * 16,
-            argon_mem_cost=PAYLOAD_SIZE,
+            argon_mem_cost=ARGON_MEM_COST,
             argon_time_cost=2,
             argon_parallelism=1,
             nonce_aes_gcm=b"\x02" * 12,
@@ -60,7 +60,7 @@ def test_unsupported_key_mode() -> None:
             key_mode=KEY_MODE_PASSWORD_ONLY,
             header_flags=0,
             salt_argon2=b"\x01" * 16,
-            argon_mem_cost=PAYLOAD_SIZE,
+            argon_mem_cost=ARGON_MEM_COST,
             argon_time_cost=2,
             argon_parallelism=1,
             nonce_aes_gcm=b"\x02" * 12,
