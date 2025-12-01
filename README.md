@@ -7,7 +7,7 @@ Zilant Encrypt — CLI-утилита для шифрования файлов �
 ```bash
 python -m pip install .
 # или dev-зависимости
-python -m pip install .[dev]
+python -m pip install -e .[dev]
 ```
 
 ## Использование
@@ -29,5 +29,9 @@ zilenc info output.zil
 ## Тесты
 
 ```bash
+python -m black src tests
+python -m ruff check src tests
+python -m isort src tests
+python -m mypy src tests
 pytest -q
 ```
