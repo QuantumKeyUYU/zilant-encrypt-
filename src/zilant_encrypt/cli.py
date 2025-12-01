@@ -85,7 +85,7 @@ def info(container: Path) -> None:
     console.print(f"Key mode: {header.key_mode}")
     console.print(
         f"Argon2id: mem={header.argon_mem_cost} KiB, "
-        f"time={header.argon_time_cost}, p={header.argon_parallelism}"
+        f"time={header.argon_time_cost}, p={header.argon_parallelism}",
     )
     payload_size = max(len(data) - HEADER_LEN, 0)
     console.print(f"Encrypted payload size: ~{payload_size} bytes")

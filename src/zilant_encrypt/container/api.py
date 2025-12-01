@@ -107,7 +107,7 @@ class _PayloadSource:
 
 
 class _PasswordOnlyProviderFactory:
-    def __init__(self, password: str, params: Argon2Params, salt: bytes):
+    def __init__(self, password: str, params: Argon2Params, salt: bytes) -> None:
         self.password = password
         self.params = params
         self.salt = salt
