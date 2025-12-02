@@ -12,12 +12,18 @@ from rich.console import Console
 from rich.table import Table
 
 from zilant_encrypt import __version__
-from zilant_encrypt.container import api
-from zilant_encrypt.container.api import ModeLiteral, normalize_mode
-from zilant_encrypt.container.format import (
+from zilant_encrypt.container import (
     KEY_MODE_PASSWORD_ONLY,
     KEY_MODE_PQ_HYBRID,
+    ModeLiteral,
+    check_container,
+    decrypt_auto_volume,
+    decrypt_file,
+    encrypt_file,
+    encrypt_with_decoy,
+    normalize_mode,
     read_header_from_stream,
+    resolve_argon_params,
 )
 from zilant_encrypt.crypto import pq
 from zilant_encrypt.errors import (
@@ -260,7 +266,7 @@ def encrypt(
     normalized_mode = cast(ModeLiteral, _normalized_mode(mode, default_to_password=True))
 
     try:
-        argon_params = api.resolve_argon_params(
+        argon_params = resolve_argon_params(
             mem_kib=argon_mem_kib,
             time_cost=argon_time,
             parallelism=argon_parallelism,
@@ -283,9 +289,9 @@ def encrypt(
         decoy_payload = decoy_input or input_path
 
         code = _handle_action(
-            lambda: api.encrypt_with_decoy(
-                input_path,
-                target,
+            lambda: encrypt_with_decoy(
+                main_input=input_path,
+                out_path=target,
                 main_password=password,
                 decoy_password=decoy_password_opt,
                 input_path_decoy=decoy_payload,
@@ -313,7 +319,7 @@ def encrypt(
                 return
 
         code = _handle_action(
-            lambda: api.encrypt_file(
+            lambda: encrypt_file(
                 input_path,
                 target,
                 password,
@@ -389,7 +395,7 @@ def decrypt(
         volume_result: dict[str, tuple[int, str]] = {}
 
         def _run_auto() -> None:
-            volume_result["value"] = api.decrypt_auto_volume(
+            volume_result["value"] = decrypt_auto_volume(
                 container,
                 out_path,
                 password=password,
@@ -405,7 +411,7 @@ def decrypt(
     else:
         dec_volume = cast(Literal["main", "decoy"], volume)
         code = _handle_action(
-            lambda: api.decrypt_file(
+            lambda: decrypt_file(
                 container,
                 out_path,
                 password,
@@ -439,7 +445,7 @@ def info(ctx: click.Context, container: Path, password_opt: str | None, show_vol
     password = _prompt_password(password_opt) if password_opt is not None else None
 
     try:
-        overview, _ = api.check_container(container, password=None)
+        overview, _ = check_container(container, password=None)
     except (ContainerFormatError, UnsupportedFeatureError):
         console.print("[red]Error: container is corrupted or not supported[/red]")
         ctx.exit(EXIT_CORRUPT)
@@ -455,9 +461,7 @@ def info(ctx: click.Context, container: Path, password_opt: str | None, show_vol
         for candidate in overview.descriptors:
             check_vol = _volume_selector(candidate.volume_index)
             try:
-                _checked, ids = api.check_container(
-                    container, password=password, volume_selector=check_vol
-                )
+                _checked, ids = check_container(container, password=password, volume_selector=check_vol)
                 validated.update(ids)
             except InvalidPassword:
                 continue
@@ -580,7 +584,7 @@ def check(
     check_volume = cast(Literal["main", "decoy", "all"], volume)
 
     def _run() -> None:
-        overview, validated = api.check_container(
+        overview, validated = check_container(
             container, password=password, mode=check_mode, volume_selector=check_volume
         )
         # Use 'layout' instead of 'l'
