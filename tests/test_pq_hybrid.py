@@ -1,5 +1,4 @@
 import os
-import os
 from pathlib import Path
 
 import pytest
@@ -7,7 +6,10 @@ import pytest
 pytest.importorskip("oqs")
 
 from zilant_encrypt.container.api import decrypt_file, encrypt_file  # noqa: E402
-from zilant_encrypt.container.format import KEY_MODE_PQ_HYBRID, read_header_from_stream  # noqa: E402
+from zilant_encrypt.container.format import (  # noqa: E402
+    KEY_MODE_PQ_HYBRID,
+    read_header_from_stream,
+)
 
 
 def test_pq_hybrid_roundtrip(tmp_path: Path) -> None:

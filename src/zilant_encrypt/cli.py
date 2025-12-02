@@ -5,7 +5,7 @@ from __future__ import annotations
 import getpass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal, cast
 
 import click
 from rich.console import Console
@@ -50,11 +50,12 @@ def _prompt_password(password_opt: str | None) -> str:
     return getpass.getpass("Password: ")
 
 
-def _human_size(num: int) -> str:
+def _human_size(num_bytes: int) -> str:
+    num = float(num_bytes)
     for unit in ("B", "KB", "MB", "GB", "TB"):
-        if num < 1024 or unit == "TB":
-            return f"{num:.1f} {unit}" if unit != "B" else f"{num} {unit}"
-        num /= 1024
+        if num < 1024.0 or unit == "TB":
+            return f"{num:.1f} {unit}" if unit != "B" else f"{int(num)} {unit}"
+        num /= 1024.0
     return f"{num:.1f} TB"
 
 
@@ -223,6 +224,10 @@ def encrypt(
             return
 
         decoy_payload = decoy_input or input_path
+
+        # Cast mode string to Literal
+        enc_mode = cast(Literal["password", "pq-hybrid"], mode)
+
         code = _handle_action(
             lambda: api.encrypt_with_decoy(
                 input_path,
@@ -230,7 +235,7 @@ def encrypt(
                 main_password=password,
                 decoy_password=decoy_password_opt,
                 input_path_decoy=decoy_payload,
-                mode=mode,
+                mode=enc_mode,
                 overwrite=overwrite,
                 argon_params=argon_params,
             ),
@@ -253,14 +258,18 @@ def encrypt(
                 ctx.exit(EXIT_USAGE)
                 return
 
+        # Cast to Literals
+        enc_mode_single = cast(Literal["password", "pq-hybrid"], mode)
+        enc_volume = cast(Literal["main", "decoy"], volume)
+
         code = _handle_action(
             lambda: api.encrypt_file(
                 input_path,
                 target,
                 password,
                 overwrite=overwrite,
-                mode=mode,
-                volume=volume,
+                mode=enc_mode_single,
+                volume=enc_volume,
                 argon_params=argon_params,
             ),
         )
@@ -313,26 +322,35 @@ def decrypt(
         ctx.exit(EXIT_PQ_UNSUPPORTED)
         return
 
+    dec_mode = cast(Literal["password", "pq-hybrid"] | None, mode)
+
     if volume is None:
         volume_result: dict[str, tuple[int, str]] = {}
+
+        def _run_auto() -> None:
+            volume_result["value"] = api.decrypt_auto_volume(
+                container,
+                out_path,
+                password=password,
+                overwrite=overwrite,
+                mode=dec_mode,
+            )
+
         code = _handle_action(
-            lambda: volume_result.setdefault(
-                "value",
-                api.decrypt_auto_volume(
-                    container,
-                    out_path,
-                    password=password,
-                    overwrite=overwrite,
-                    mode=mode,
-                ),
-            ),
+            _run_auto,
             invalid_password_message="[red]Invalid password or key[/red]",
             integrity_error_message="[red]Error: container is corrupted or not supported[/red]",
         )
     else:
+        dec_volume = cast(Literal["main", "decoy"], volume)
         code = _handle_action(
             lambda: api.decrypt_file(
-                container, out_path, password, overwrite=overwrite, mode=mode, volume=volume
+                container,
+                out_path,
+                password,
+                overwrite=overwrite,
+                mode=dec_mode,
+                volume=dec_volume,
             ),
         )
     if code == EXIT_SUCCESS:
@@ -371,9 +389,10 @@ def info(ctx: click.Context, container: Path, password_opt: str | None, show_vol
     if password is not None:
         for candidate in overview.descriptors:
             label = "main" if candidate.volume_id == 0 else "decoy" if candidate.volume_id == 1 else "all"
+            check_vol = cast(Literal["main", "decoy", "all"], label if label in {"main", "decoy"} else "all")
             try:
                 _checked, ids = api.check_container(
-                    container, password=password, volume=label if label in {"main", "decoy"} else "all"
+                    container, password=password, volume=check_vol
                 )
                 validated.update(ids)
             except InvalidPassword:
@@ -391,7 +410,8 @@ def info(ctx: click.Context, container: Path, password_opt: str | None, show_vol
             ctx.exit(EXIT_CRYPTO)
             return
 
-    ordered_layouts = sorted(overview.layouts, key=lambda l: l.descriptor.volume_id)
+    # Use 'layout' instead of 'l'
+    ordered_layouts = sorted(overview.layouts, key=lambda layout: layout.descriptor.volume_id)
     primary_layout = ordered_layouts[0]
     selected = primary_layout.descriptor
 
@@ -484,9 +504,15 @@ def check(
     perform_auth = password_opt is not None or mode is not None or volume != "all"
     password = _prompt_password(password_opt) if perform_auth else None
 
+    check_mode = cast(Literal["password", "pq-hybrid"] | None, mode)
+    check_volume = cast(Literal["main", "decoy", "all"], volume)
+
     def _run() -> None:
-        overview, validated = api.check_container(container, password=password, mode=mode, volume=volume)
-        ordered_layouts = sorted(overview.layouts, key=lambda l: l.descriptor.volume_id)
+        overview, validated = api.check_container(
+            container, password=password, mode=check_mode, volume=check_volume
+        )
+        # Use 'layout' instead of 'l'
+        ordered_layouts = sorted(overview.layouts, key=lambda layout: layout.descriptor.volume_id)
         primary = ordered_layouts[0]
         table = Table(show_header=False, box=None)
         table.add_row("Magic/Version", f"ZILENC / {overview.header.version}")
@@ -536,7 +562,7 @@ def check(
 
 def main(argv: list[str] | None = None) -> int:
     try:
-        return cli.main(args=argv, prog_name="zilenc", standalone_mode=False)
+        return cli.main(args=argv, prog_name="zilenc", standalone_mode=False)  # type: ignore[no-any-return]
     except SystemExit as exc:  # noqa: TRY003
         code = exc.code if isinstance(exc.code, int) else EXIT_USAGE
         return code

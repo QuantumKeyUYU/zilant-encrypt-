@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 import os
+from dataclasses import dataclass, replace
 from struct import Struct
-
-from typing import Iterable
+from typing import IO, Any, Iterable
 
 from zilant_encrypt.errors import ContainerFormatError, UnsupportedFeatureError
 
@@ -344,7 +343,7 @@ def _validate_volume_layout(
 
 def build_header_v3(
     volume_descriptors: Iterable[VolumeDescriptor],
-    common_meta: dict,  # noqa: ARG001
+    common_meta: dict[str, Any],  # noqa: ARG001
 ) -> bytes:
     descriptors = list(volume_descriptors)
     if not descriptors:
@@ -412,10 +411,9 @@ def build_header(  # noqa: PLR0913
     pq_wrapped_secret: bytes | None = None,
     pq_wrapped_secret_tag: bytes | None = None,
     volume_descriptors: Iterable[VolumeDescriptor] | None = None,
-    common_meta: dict | None = None,
+    common_meta: dict[str, Any] | None = None,
 ) -> bytes:
     """Build container header bytes for the requested version."""
-
     reserved_bytes = _validate_common_inputs(
         salt_argon2=salt_argon2,
         nonce_aes_gcm=nonce_aes_gcm,
@@ -621,7 +619,6 @@ def _parse_header_v2(data: bytes) -> tuple[ContainerHeader, list[VolumeDescripto
 
 def header_aad(header_bytes: bytes) -> bytes:
     """Return header bytes used as AAD (everything except magic+version)."""
-
     if len(header_bytes) < MAGIC_LEN + VERSION_LEN:
         raise ContainerFormatError("Header must be fully formed")
     return header_bytes[MAGIC_LEN + VERSION_LEN :]
@@ -914,7 +911,6 @@ def parse_header_v3(data: bytes) -> tuple[ContainerHeader, list[VolumeDescriptor
 
 def parse_header(data: bytes) -> tuple[ContainerHeader, list[VolumeDescriptor]]:
     """Parse and validate header bytes."""
-
     if len(data) < MAGIC_LEN + VERSION_LEN:
         raise ContainerFormatError("Header too short")
 
@@ -936,9 +932,10 @@ def parse_header(data: bytes) -> tuple[ContainerHeader, list[VolumeDescriptor]]:
     raise ContainerFormatError("Unsupported version")
 
 
-def read_header_from_stream(file_obj) -> tuple[ContainerHeader, list[VolumeDescriptor], bytes]:
+def read_header_from_stream(
+    file_obj: IO[bytes],
+) -> tuple[ContainerHeader, list[VolumeDescriptor], bytes]:
     """Read and parse a container header from a binary stream."""
-
     prefix = file_obj.read(_HEADER_STRUCT_V3_PREFIX.size)
     if len(prefix) < MAGIC_LEN + VERSION_LEN:
         raise ContainerFormatError("Container too small for header")

@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+import zilant_encrypt.container.format as fmt
 from zilant_encrypt.cli import (
     EXIT_CORRUPT,
     EXIT_CRYPTO,
@@ -13,10 +14,9 @@ from zilant_encrypt.cli import (
     cli,
 )
 from zilant_encrypt.container import api
-import zilant_encrypt.container.format as fmt
 from zilant_encrypt.crypto import pq
 from zilant_encrypt.crypto.aead import TAG_LEN
-from zilant_encrypt.crypto.kdf import Argon2Params, recommended_params
+from zilant_encrypt.crypto.kdf import recommended_params
 
 
 def test_cli_encrypt_decrypt_file(tmp_path: Path) -> None:

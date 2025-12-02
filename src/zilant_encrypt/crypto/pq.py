@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 try:  # pragma: no cover - optional dependency
-    import oqs
+    import oqs  # type: ignore[import-not-found]
 
     _OQS_AVAILABLE = True
 except ImportError:  # pragma: no cover - optional dependency
@@ -12,7 +12,6 @@ except ImportError:  # pragma: no cover - optional dependency
 
 def available() -> bool:
     """Return True if the oqs library is importable."""
-
     return _OQS_AVAILABLE
 
 
@@ -23,7 +22,6 @@ def _ensure_available() -> None:
 
 def generate_kem_keypair() -> tuple[bytes, bytes]:
     """Generate a Kyber768 KEM keypair."""
-
     _ensure_available()
     with oqs.KeyEncapsulation("Kyber768") as kem:
         public_key = kem.generate_keypair()
@@ -33,7 +31,6 @@ def generate_kem_keypair() -> tuple[bytes, bytes]:
 
 def encapsulate(public_key: bytes) -> tuple[bytes, bytes]:
     """Encapsulate a shared secret for the provided public key."""
-
     _ensure_available()
     with oqs.KeyEncapsulation("Kyber768") as kem:
         kem.import_public_key(public_key)
@@ -43,8 +40,7 @@ def encapsulate(public_key: bytes) -> tuple[bytes, bytes]:
 
 def decapsulate(ciphertext: bytes, secret_key: bytes) -> bytes:
     """Recover the shared secret using the provided KEM secret key."""
-
     _ensure_available()
     with oqs.KeyEncapsulation("Kyber768") as kem:
         kem.import_secret_key(secret_key)
-        return kem.decap_secret(ciphertext)
+        return kem.decap_secret(ciphertext)  # type: ignore[no-any-return]

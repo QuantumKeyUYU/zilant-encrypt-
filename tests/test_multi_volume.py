@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from zilant_encrypt.container import api
 import zilant_encrypt.container.format as fmt
+from zilant_encrypt.container import api
 from zilant_encrypt.container.format import (
     KEY_MODE_PASSWORD_ONLY,
     KEY_MODE_PQ_HYBRID,
@@ -13,7 +13,12 @@ from zilant_encrypt.container.format import (
 )
 from zilant_encrypt.crypto import pq
 from zilant_encrypt.crypto.kdf import recommended_params
-from zilant_encrypt.errors import ContainerFormatError, IntegrityError, InvalidPassword, UnsupportedFeatureError
+from zilant_encrypt.errors import (
+    ContainerFormatError,
+    IntegrityError,
+    InvalidPassword,
+    UnsupportedFeatureError,
+)
 
 
 def test_main_and_decoy_roundtrip_password_only(tmp_path: Path) -> None:

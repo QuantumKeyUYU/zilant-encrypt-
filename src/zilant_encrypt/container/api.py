@@ -9,7 +9,7 @@ import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import TracebackType
-from typing import IO, Literal, Optional, Protocol, Type, runtime_checkable
+from typing import IO, Any, Literal, Optional, Protocol, Type, runtime_checkable
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
@@ -24,17 +24,16 @@ from zilant_encrypt.container.format import (
     PQ_PLACEHOLDER_CIPHERTEXT_LEN,
     PQ_PLACEHOLDER_SECRET_LEN,
     RESERVED_LEN,
-    WRAPPED_KEY_TAG_LEN,
-    VERSION_PQ_HYBRID,
-    VERSION_V1,
     VERSION_V3,
+    WRAPPED_KEY_TAG_LEN,
+    ContainerHeader,
     VolumeDescriptor,
     build_header,
     read_header_from_stream,
 )
+from zilant_encrypt.crypto import pq
 from zilant_encrypt.crypto.aead import TAG_LEN, AesGcmEncryptor
 from zilant_encrypt.crypto.kdf import Argon2Params, derive_key_from_password, recommended_params
-from zilant_encrypt.crypto import pq
 from zilant_encrypt.errors import (
     ContainerFormatError,
     IntegrityError,
@@ -64,7 +63,7 @@ class VolumeLayout:
 
 @dataclass(frozen=True)
 class ContainerOverview:
-    header: "ContainerHeader"
+    header: ContainerHeader
     descriptors: list[VolumeDescriptor]
     header_bytes: bytes
     layouts: list[VolumeLayout]
@@ -109,7 +108,6 @@ def resolve_argon_params(
     base: Argon2Params | None = None,
 ) -> Argon2Params:
     """Build validated Argon2 parameters using overrides when provided."""
-
     defaults = base or recommended_params()
     candidate = Argon2Params(
         mem_cost_kib=mem_kib if mem_kib is not None else defaults.mem_cost_kib,
@@ -166,7 +164,7 @@ class _PayloadSource:
         self.path = path
         self.meta = PayloadMeta(kind="file", name=path.name)
 
-    def __enter__(self) -> Path:
+    def __enter__(self) -> _PayloadSource:
         if self.original.is_dir():
             self.temp_dir = tempfile.TemporaryDirectory()
             try:
@@ -189,10 +187,15 @@ class _PayloadSource:
         exc_type: Optional[Type[BaseException]],
         exc: Optional[BaseException],
         tb: Optional[TracebackType],
-    ) -> bool:
+    ) -> Literal[False]:
         if self.temp_dir:
             self.temp_dir.cleanup()
         return False
+
+
+class PayloadWriterProtocol(Protocol):
+    def feed(self, data: bytes) -> None: ...
+    def finalize(self) -> None: ...
 
 
 class _NullWriter:
@@ -211,9 +214,6 @@ class _PasswordOnlyProviderFactory:
 
     def build(self) -> PasswordKeyProvider:
         return PasswordKeyProvider(self.password, self.salt, self.params)
-
-
-# TODO: introduce HybridPQKeyProvider when PQ KEM is ready.
 
 
 def _ensure_output(path: Path, overwrite: bool) -> None:
@@ -263,7 +263,8 @@ class _PayloadWriter:
         self.meta: PayloadMeta | None = None
         self._buffer = bytearray()
         self._file_handle: IO[bytes] | None = None
-        self._temp_zip: tempfile.NamedTemporaryFile | None = None
+        # Use Any for _temp_zip to avoid complex private type imports from tempfile
+        self._temp_zip: Any | None = None
 
     def _parse_meta(self) -> None:
         if len(self._buffer) < len(PAYLOAD_MAGIC):
@@ -317,7 +318,7 @@ class _PayloadWriter:
             self._file_handle = self.out_path.open("xb")
         return self._file_handle
 
-    def _ensure_temp_zip(self) -> tempfile.NamedTemporaryFile:
+    def _ensure_temp_zip(self) -> Any:
         if self._temp_zip is None:
             self._temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
         return self._temp_zip
@@ -399,7 +400,7 @@ def _encrypt_stream(
 
 def _decrypt_stream(
     in_file: IO[bytes],
-    writer: _PayloadWriter,
+    writer: PayloadWriterProtocol,
     key: bytes,
     nonce: bytes,
     aad: bytes,
@@ -577,7 +578,6 @@ def check_container(
 
     Returns a tuple of (overview, validated_volume_ids).
     """
-
     overview = _load_overview(Path(container_path))
 
     if password is None:
@@ -589,7 +589,8 @@ def check_container(
     with Path(container_path).open("rb") as f:
         for desc in selected:
             file_key = _derive_file_key(desc, password, mode)
-            layout = next((l for l in overview.layouts if l.descriptor.volume_id == desc.volume_id), None)
+            # Use 'layout' instead of 'l'
+            layout = next((layout for layout in overview.layouts if layout.descriptor.volume_id == desc.volume_id), None)
             if layout is None:
                 raise ContainerFormatError("Missing layout information for volume")
             f.seek(desc.payload_offset)
@@ -617,7 +618,6 @@ def encrypt_file(
     argon_params: Argon2Params | None = None,
 ) -> None:
     """Encrypt input file or directory into a .zil container."""
-
     if not in_path.exists():
         raise FileNotFoundError(in_path)
     is_new = not out_path.exists()
@@ -788,7 +788,6 @@ def encrypt_with_decoy(
     argon_params: Argon2Params | None = None,
 ) -> None:
     """Create a container with both main and decoy volumes in one call."""
-
     main_path = Path(input_path_main)
     decoy_path = Path(input_path_decoy) if input_path_decoy is not None else main_path
     out_path = Path(container_path)
@@ -1041,7 +1040,6 @@ def decrypt_file(
     volume: Literal["main", "decoy"] = "main",
 ) -> None:
     """Decrypt a container to an output file."""
-
     if not container_path.exists():
         raise FileNotFoundError(container_path)
 
@@ -1162,7 +1160,6 @@ def decrypt_auto_volume(
     volume. Raises :class:`InvalidPassword` if none of the volumes could be
     decrypted with the given password.
     """
-
     container = Path(container_path)
     output = Path(out_path)
 

@@ -158,4 +158,3 @@ format hardening, CLI/UX improvements, testing, and documentation targets.
 - Add usage examples: creating PQ-enabled containers, opening hidden vs outer
   volumes, running `check`, and interpreting outputs for healthy vs corrupted
   containers.
-

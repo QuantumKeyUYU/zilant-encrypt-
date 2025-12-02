@@ -2,12 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from pathlib import Path
-
-import pytest
-
-from zilant_encrypt.container import api
 import zilant_encrypt.container.format as fmt
+from zilant_encrypt.container import api
 from zilant_encrypt.crypto import pq
 from zilant_encrypt.crypto.aead import TAG_LEN
 from zilant_encrypt.errors import ContainerFormatError, IntegrityError, PqSupportError
@@ -149,7 +145,7 @@ def test_pq_metadata_corruption_detection(tmp_path: Path) -> None:
         api.decrypt_file(corrupted, tmp_path / "out.bin", "pw", mode="pq-hybrid")
 
     # Tamper with reserved bytes in the PQ metadata blob.
-    meta_start = descriptor_table_offset + entry_size
+    # meta_start = descriptor_table_offset + entry_size  <-- Removed unused variable
     meta_end = header.header_len
     tampered_header = bytearray(header_bytes)
     tampered_header[meta_end - 1] ^= 0xFF

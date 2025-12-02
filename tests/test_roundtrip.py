@@ -1,15 +1,12 @@
 import os
-import os
 from pathlib import Path
 
 import pytest
 
+from zilant_encrypt.container.api import STREAM_CHUNK_SIZE, decrypt_file, encrypt_file
+from zilant_encrypt.container.format import VERSION_V3, read_header_from_stream
 from zilant_encrypt.crypto.kdf import Argon2Params
 from zilant_encrypt.errors import UnsupportedFeatureError
-
-from zilant_encrypt.container.api import decrypt_file, encrypt_file
-from zilant_encrypt.container.api import STREAM_CHUNK_SIZE
-from zilant_encrypt.container.format import VERSION_V3, read_header_from_stream
 
 PAYLOAD_SIZE = 1024
 
