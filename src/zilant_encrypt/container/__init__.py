@@ -1,4 +1,9 @@
-"""Container API surface re-exported for external users."""
+"""Public container API re-exported for external users.
+
+The objects listed in ``__all__`` form the supported public surface for
+Python consumers in v0.2. Everything else in :mod:`zilant_encrypt.container`
+is considered internal and may change without notice.
+"""
 from __future__ import annotations
 
 from zilant_encrypt.container.core import (
@@ -12,7 +17,6 @@ from zilant_encrypt.container.core import (
     ModeLiteral,
     PayloadMeta,
     VolumeLayout,
-    _decrypt_volume,
     build_volume_descriptor,
     check_container,
     decrypt_auto_volume,
@@ -22,8 +26,8 @@ from zilant_encrypt.container.core import (
     normalize_mode,
     resolve_argon_params,
 )
-from zilant_encrypt.container.keymgmt import PasswordKeyProvider, WrappedKey, WRAP_NONCE
 from zilant_encrypt.container.format import KEY_MODE_PASSWORD_ONLY, KEY_MODE_PQ_HYBRID, read_header_from_stream
+from zilant_encrypt.container.keymgmt import PasswordKeyProvider, WrappedKey, WRAP_NONCE
 from zilant_encrypt.container.payload import (
     MAX_PAYLOAD_META_LEN,
     PAYLOAD_MAGIC,
@@ -42,8 +46,10 @@ __all__ = [
     "ARGON_TIME_MIN",
     "Argon2Params",
     "ContainerOverview",
-    "ModeLiteral",
+    "KEY_MODE_PASSWORD_ONLY",
+    "KEY_MODE_PQ_HYBRID",
     "MAX_PAYLOAD_META_LEN",
+    "ModeLiteral",
     "PAYLOAD_MAGIC",
     "PAYLOAD_META_LEN_SIZE",
     "PAYLOAD_VERSION",
@@ -53,10 +59,6 @@ __all__ = [
     "VolumeLayout",
     "WrappedKey",
     "WRAP_NONCE",
-    "KEY_MODE_PASSWORD_ONLY",
-    "KEY_MODE_PQ_HYBRID",
-    "read_header_from_stream",
-    "_decrypt_volume",
     "build_volume_descriptor",
     "check_container",
     "decrypt_auto_volume",
@@ -64,5 +66,6 @@ __all__ = [
     "encrypt_file",
     "encrypt_with_decoy",
     "normalize_mode",
+    "read_header_from_stream",
     "resolve_argon_params",
 ]
