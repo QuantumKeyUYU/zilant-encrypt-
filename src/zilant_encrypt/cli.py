@@ -204,6 +204,11 @@ def decrypt(
     password = _prompt_password(password_opt)
     out_path = output_path or container.with_suffix(container.suffix + ".out")
 
+    if mode == "pq-hybrid" and not pq.available():
+        console.print("[red]PQ-hybrid mode requires the 'oqs' library; install it or use password-only mode.[/red]")
+        ctx.exit(EXIT_USAGE)
+        return
+
     code = _handle_action(
         lambda: api.decrypt_file(
             container, out_path, password, overwrite=overwrite, mode=mode, volume=volume
@@ -241,7 +246,7 @@ def info(ctx: click.Context, container: Path) -> None:
     table = Table(show_header=False, box=None)
     table.add_row("Magic/Version", f"ZILENC / {header.version}")
     if header.key_mode == KEY_MODE_PQ_HYBRID:
-        mode_label = "pq-hybrid (experimental)"
+        mode_label = "pq-hybrid (Kyber768 + AES-GCM)"
     elif header.key_mode == KEY_MODE_PASSWORD_ONLY:
         mode_label = "password-only"
     else:
@@ -262,12 +267,17 @@ def info(ctx: click.Context, container: Path) -> None:
         name = "main" if desc.volume_id == 0 else "decoy" if desc.volume_id == 1 else f"id={desc.volume_id}"
         size = desc.payload_length if desc.payload_length else max(len(data) - desc.payload_offset - TAG_LEN, 0)
         if desc.key_mode == KEY_MODE_PQ_HYBRID:
-            mode_label = "pq-hybrid"
+            mode_label = "pq-hybrid (Kyber768 + AES-GCM)"
         elif desc.key_mode == KEY_MODE_PASSWORD_ONLY:
-            mode_label = "password"
+            mode_label = "password-only"
         else:
             mode_label = f"unknown ({desc.key_mode})"
-        console.print(f"  - {name} (id={desc.volume_id}, key_mode={mode_label}, size≈{_human_size(size)})")
+        console.print(
+            "  - "
+            + name
+            + f" (id={desc.volume_id}, key_mode={mode_label}, size≈{_human_size(size)}, "
+            + f"argon2: mem={desc.argon_mem_cost} KiB, time={desc.argon_time_cost}, p={desc.argon_parallelism})",
+        )
     ctx.exit(EXIT_SUCCESS)
 
 

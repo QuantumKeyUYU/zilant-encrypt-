@@ -362,7 +362,7 @@ def encrypt_file(
     password: str,
     *,
     overwrite: bool = False,
-    mode: Literal["password", "pq-hybrid"] = "password",
+    mode: Literal["password", "pq-hybrid"] | None = None,
     volume: Literal["main", "decoy"] = "main",
 ) -> None:
     """Encrypt input file or directory into a .zil container."""
@@ -376,14 +376,21 @@ def encrypt_file(
 
     argon_params = recommended_params()
 
+    requested_mode = mode
+    if requested_mode is None and not (volume == "decoy" and not is_new):
+        requested_mode = "password"
+
+    if requested_mode is not None and requested_mode not in {"password", "pq-hybrid"}:
+        raise UnsupportedFeatureError(f"Unknown encryption mode: {requested_mode}")
+
+    if requested_mode == "pq-hybrid" and not pq.available():
+        raise UnsupportedFeatureError("PQ-hybrid mode is not available (oqs not installed)")
+
     if volume == "decoy" and is_new:
         raise UnsupportedFeatureError("decoy volume can only be added to an existing v3 container")
 
     if is_new and volume != "main":
         raise UnsupportedFeatureError("decoy volume requires an existing container")
-
-    if volume == "decoy" and mode != "password":
-        raise UnsupportedFeatureError("decoy volume supports only password mode")
 
     if volume == "decoy":
         file_size = out_path.stat().st_size
@@ -397,6 +404,22 @@ def encrypt_file(
         if main_descriptor is None:
             raise ContainerFormatError("Main volume missing from container")
 
+        # Ensure all existing descriptors share the same key_mode.
+        if any(d.key_mode != main_descriptor.key_mode for d in descriptors):
+            raise UnsupportedFeatureError(
+                "all volumes in a container must share the same key_mode",
+            )
+
+        container_mode = "pq-hybrid" if main_descriptor.key_mode == KEY_MODE_PQ_HYBRID else "password"
+        effective_mode = requested_mode or container_mode
+        if effective_mode != container_mode:
+            raise UnsupportedFeatureError(
+                "cannot create decoy volume with different key_mode than main volume",
+            )
+
+        if container_mode == "pq-hybrid" and not pq.available():
+            raise UnsupportedFeatureError("PQ-hybrid mode is not available (oqs not installed)")
+
         main_cipher_len = _ciphertext_length_for_descriptor(main_descriptor, descriptors, file_size)
 
         with _PayloadSource(in_path) as payload_source:
@@ -406,24 +429,75 @@ def encrypt_file(
             salt = os.urandom(16)
             nonce = os.urandom(12)
             file_key = os.urandom(32)
-            provider = _PasswordOnlyProviderFactory(password, argon_params, salt).build()
-            wrapped_key = provider.wrap_file_key(file_key)
 
-            decoy_descriptor = VolumeDescriptor(
-                volume_id=1,
-                key_mode=KEY_MODE_PASSWORD_ONLY,
-                flags=0,
-                payload_offset=0,
-                payload_length=plaintext_len,
-                salt_argon2=salt,
-                argon_mem_cost=argon_params.mem_cost_kib,
-                argon_time_cost=argon_params.time_cost,
-                argon_parallelism=argon_params.parallelism,
-                nonce_aes_gcm=nonce,
-                wrapped_key=wrapped_key.data,
-                wrapped_key_tag=wrapped_key.tag,
-                reserved=bytes(RESERVED_LEN),
-            )
+            if main_descriptor.key_mode == KEY_MODE_PASSWORD_ONLY:
+                provider = _PasswordOnlyProviderFactory(password, argon_params, salt).build()
+                wrapped_key = provider.wrap_file_key(file_key)
+                decoy_descriptor = VolumeDescriptor(
+                    volume_id=1,
+                    key_mode=KEY_MODE_PASSWORD_ONLY,
+                    flags=0,
+                    payload_offset=0,
+                    payload_length=plaintext_len,
+                    salt_argon2=salt,
+                    argon_mem_cost=argon_params.mem_cost_kib,
+                    argon_time_cost=argon_params.time_cost,
+                    argon_parallelism=argon_params.parallelism,
+                    nonce_aes_gcm=nonce,
+                    wrapped_key=wrapped_key.data,
+                    wrapped_key_tag=wrapped_key.tag,
+                    reserved=bytes(RESERVED_LEN),
+                )
+            else:
+                password_key = derive_key_from_password(
+                    password,
+                    salt,
+                    mem_cost=argon_params.mem_cost_kib,
+                    time_cost=argon_params.time_cost,
+                    parallelism=argon_params.parallelism,
+                )
+                public_key, secret_key = pq.generate_kem_keypair()
+                kem_ciphertext, shared_secret = pq.encapsulate(public_key)
+
+                hkdf = HKDF(
+                    algorithm=hashes.SHA256(),
+                    length=32,
+                    salt=None,
+                    info=b"zilant-pq-hybrid",
+                )
+                master_key = hkdf.derive(shared_secret + password_key)
+
+                wrapped_key_data, wrapped_key_tag = AesGcmEncryptor.encrypt(
+                    master_key,
+                    WRAP_NONCE,
+                    file_key,
+                    b"",
+                )
+                wrapped_secret, wrapped_secret_tag = AesGcmEncryptor.encrypt(
+                    password_key,
+                    WRAP_NONCE,
+                    secret_key,
+                    b"",
+                )
+
+                decoy_descriptor = VolumeDescriptor(
+                    volume_id=1,
+                    key_mode=KEY_MODE_PQ_HYBRID,
+                    flags=0,
+                    payload_offset=0,
+                    payload_length=plaintext_len,
+                    salt_argon2=salt,
+                    argon_mem_cost=argon_params.mem_cost_kib,
+                    argon_time_cost=argon_params.time_cost,
+                    argon_parallelism=argon_params.parallelism,
+                    nonce_aes_gcm=nonce,
+                    wrapped_key=wrapped_key_data,
+                    wrapped_key_tag=wrapped_key_tag,
+                    reserved=bytes(RESERVED_LEN),
+                    pq_ciphertext=kem_ciphertext,
+                    pq_wrapped_secret=wrapped_secret,
+                    pq_wrapped_secret_tag=wrapped_secret_tag,
+                )
 
             updated_main = replace(
                 main_descriptor,
@@ -523,6 +597,8 @@ def encrypt_file(
     salt = os.urandom(16)
     nonce = os.urandom(12)
     file_key = os.urandom(32)
+
+    mode = requested_mode
 
     if mode == "password":
         provider = _PasswordOnlyProviderFactory(password, argon_params, salt).build()
@@ -673,27 +749,35 @@ def decrypt_file(
         if descriptor is None:
             raise ContainerFormatError(f"Volume id {target_volume} not found")
 
+        main_descriptor = next((d for d in descriptors if d.volume_id == 0), None)
+        if main_descriptor is not None and any(d.key_mode != main_descriptor.key_mode for d in descriptors):
+            raise UnsupportedFeatureError("all volumes in a container must share the same key_mode")
+
         decrypt_params = Argon2Params(
             mem_cost_kib=descriptor.argon_mem_cost,
             time_cost=descriptor.argon_time_cost,
             parallelism=descriptor.argon_parallelism,
         )
 
-        effective_mode = mode or ("pq-hybrid" if descriptor.key_mode == KEY_MODE_PQ_HYBRID else "password")
+        expected_mode = "pq-hybrid" if descriptor.key_mode == KEY_MODE_PQ_HYBRID else "password"
+        if mode is not None and mode != expected_mode:
+            raise UnsupportedFeatureError("requested decrypt mode does not match volume key_mode")
+
+        effective_mode = mode or expected_mode
         ciphertext_len = _ciphertext_length_for_descriptor(descriptor, descriptors, file_size)
         if ciphertext_len <= 0:
             raise ContainerFormatError("Invalid payload length")
 
         if descriptor.key_mode == KEY_MODE_PASSWORD_ONLY:
             if effective_mode != "password":
-                raise UnsupportedFeatureError("Container is password-only but PQ mode requested")
+                raise UnsupportedFeatureError("requested decrypt mode does not match volume key_mode")
             provider = PasswordKeyProvider(password, descriptor.salt_argon2, decrypt_params)
             file_key = provider.unwrap_file_key(
                 WrappedKey(data=descriptor.wrapped_key, tag=descriptor.wrapped_key_tag),
             )
         elif descriptor.key_mode == KEY_MODE_PQ_HYBRID:
             if effective_mode != "pq-hybrid":
-                raise UnsupportedFeatureError("PQ-hybrid container requires pq-hybrid mode")
+                raise UnsupportedFeatureError("requested decrypt mode does not match volume key_mode")
             if not pq.available():
                 raise UnsupportedFeatureError("PQ-hybrid containers require oqs support")
             password_key = derive_key_from_password(
