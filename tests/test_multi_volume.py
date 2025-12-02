@@ -3,6 +3,11 @@ from pathlib import Path
 import pytest
 
 from zilant_encrypt.container import api
+from zilant_encrypt.container.format import (
+    KEY_MODE_PASSWORD_ONLY,
+    KEY_MODE_PQ_HYBRID,
+    read_header_from_stream,
+)
 from zilant_encrypt.errors import ContainerFormatError, InvalidPassword, UnsupportedFeatureError
 from zilant_encrypt.crypto import pq
 
@@ -91,3 +96,72 @@ def test_encrypt_decrypt_pq_main_and_decoy(tmp_path: Path) -> None:
 
     assert main_out.read_text() == "MAIN"
     assert decoy_out.read_text() == "DECOY"
+
+
+def test_encrypt_with_decoy_helper_roundtrip(tmp_path: Path) -> None:
+    main_data = tmp_path / "main.txt"
+    decoy_data = tmp_path / "decoy.txt"
+    main_data.write_text("MAIN")
+    decoy_data.write_text("DECOY")
+
+    container = tmp_path / "helper.zil"
+
+    api.encrypt_with_decoy(
+        main_data,
+        container,
+        main_password="main-pass",
+        decoy_password="decoy-pass",
+        input_path_decoy=decoy_data,
+        mode="password",
+    )
+
+    main_out = tmp_path / "main_out.txt"
+    decoy_out = tmp_path / "decoy_out.txt"
+    api.decrypt_file(container, main_out, "main-pass", volume="main")
+    api.decrypt_file(container, decoy_out, "decoy-pass", volume="decoy")
+
+    assert main_out.read_text() == "MAIN"
+    assert decoy_out.read_text() == "DECOY"
+
+    with container.open("rb") as f:
+        _header, descriptors, _hb = read_header_from_stream(f)
+
+    assert len(descriptors) >= 2
+    assert all(d.key_mode == descriptors[0].key_mode for d in descriptors)
+    assert descriptors[0].key_mode == KEY_MODE_PASSWORD_ONLY
+
+
+def test_encrypt_with_decoy_helper_roundtrip_pq(tmp_path: Path) -> None:
+    if not pq.available():
+        pytest.skip("oqs not available")
+
+    main_data = tmp_path / "main.txt"
+    decoy_data = tmp_path / "decoy.txt"
+    main_data.write_text("MAIN")
+    decoy_data.write_text("DECOY")
+
+    container = tmp_path / "helper_pq.zil"
+
+    api.encrypt_with_decoy(
+        main_data,
+        container,
+        main_password="main-pass",
+        decoy_password="decoy-pass",
+        input_path_decoy=decoy_data,
+        mode="pq_hybrid",
+    )
+
+    main_out = tmp_path / "main_out.txt"
+    decoy_out = tmp_path / "decoy_out.txt"
+    api.decrypt_file(container, main_out, "main-pass", volume="main")
+    api.decrypt_file(container, decoy_out, "decoy-pass", volume="decoy")
+
+    assert main_out.read_text() == "MAIN"
+    assert decoy_out.read_text() == "DECOY"
+
+    with container.open("rb") as f:
+        _header, descriptors, _hb = read_header_from_stream(f)
+
+    assert len(descriptors) >= 2
+    assert all(d.key_mode == descriptors[0].key_mode for d in descriptors)
+    assert descriptors[0].key_mode == KEY_MODE_PQ_HYBRID

@@ -57,14 +57,21 @@ def _human_size(num: int) -> str:
     return f"{num:.1f} TB"
 
 
-def _handle_action(action: Callable[[], None]) -> int:
+def _handle_action(
+    action: Callable[[], None],
+    *,
+    invalid_password_message: str | None = None,
+    integrity_error_message: str | None = None,
+) -> int:
     try:
         action()
     except InvalidPassword:
-        console.print("[red]Invalid password.[/red]")
+        message = invalid_password_message or "[red]Invalid password.[/red]"
+        console.print(message)
         return EXIT_CRYPTO
     except IntegrityError:
-        console.print("[red]Container is corrupted or password is incorrect.[/red]")
+        message = integrity_error_message or "[red]Container is corrupted or password is incorrect.[/red]"
+        console.print(message)
         return EXIT_CRYPTO
     except (ContainerFormatError, UnsupportedFeatureError) as exc:
         console.print(f"[red]Unsupported or invalid container:[/red] {exc}")
@@ -104,6 +111,17 @@ def cli() -> None:
 @click.argument("output_path", required=False, type=click.Path(path_type=Path))
 @click.option("--password", "password_opt", help="Encryption password (will prompt if omitted).")
 @click.option(
+    "--decoy-password",
+    "decoy_password_opt",
+    help="Optional decoy volume password to create main+decoy in one step.",
+)
+@click.option(
+    "--decoy-input",
+    "decoy_input",
+    type=click.Path(path_type=Path),
+    help="Path for the decoy payload (defaults to the main input).",
+)
+@click.option(
     "--mode",
     type=click.Choice(["password", "pq-hybrid"], case_sensitive=False),
     default="password",
@@ -128,6 +146,8 @@ def encrypt(
     input_path: Path,
     output_path: Path | None,
     password_opt: str | None,
+    decoy_password_opt: str | None,
+    decoy_input: Path | None,
     overwrite: bool,
     mode: str,
     volume: str,
@@ -140,26 +160,47 @@ def encrypt(
         ctx.exit(EXIT_USAGE)
         return
 
-    if volume == "decoy" and not target.exists():
-        console.print("[red]decoy volume can only be added to an existing v3 container[/red]")
-        ctx.exit(EXIT_USAGE)
-        return
-    if volume == "decoy" and target.exists():
-        try:
-            with target.open("rb") as f:
-                header, _descriptors, _header_bytes = read_header_from_stream(f)
-            if header.version != 3:
-                raise ContainerFormatError("decoy volume requires v3 container header")
-        except Exception as exc:  # noqa: BLE001
-            console.print(f"[red]decoy volume can only be added to an existing v3 container:[/red] {exc}")
+    if decoy_password_opt:
+        if volume != "main":
+            console.print("[red]When using --decoy-password, --volume must remain 'main'.[/red]")
             ctx.exit(EXIT_USAGE)
             return
 
-    code = _handle_action(
-        lambda: api.encrypt_file(
-            input_path, target, password, overwrite=overwrite, mode=mode, volume=volume
-        ),
-    )
+        decoy_payload = decoy_input or input_path
+        code = _handle_action(
+            lambda: api.encrypt_with_decoy(
+                input_path,
+                target,
+                main_password=password,
+                decoy_password=decoy_password_opt,
+                input_path_decoy=decoy_payload,
+                mode=mode,
+                overwrite=overwrite,
+            ),
+        )
+    else:
+        if volume == "decoy" and not target.exists():
+            console.print("[red]decoy volume can only be added to an existing v3 container[/red]")
+            ctx.exit(EXIT_USAGE)
+            return
+        if volume == "decoy" and target.exists():
+            try:
+                with target.open("rb") as f:
+                    header, _descriptors, _header_bytes = read_header_from_stream(f)
+                if header.version != 3:
+                    raise ContainerFormatError("decoy volume requires v3 container header")
+            except Exception as exc:  # noqa: BLE001
+                console.print(
+                    f"[red]decoy volume can only be added to an existing v3 container:[/red] {exc}"
+                )
+                ctx.exit(EXIT_USAGE)
+                return
+
+        code = _handle_action(
+            lambda: api.encrypt_file(
+                input_path, target, password, overwrite=overwrite, mode=mode, volume=volume
+            ),
+        )
     if code == EXIT_SUCCESS:
         size = target.stat().st_size if target.exists() else 0
         console.print(f"[green]Encrypted to[/green] {target} (~{_human_size(size)}).")
@@ -187,9 +228,9 @@ def encrypt(
 @click.option(
     "--volume",
     type=click.Choice(["main", "decoy"], case_sensitive=False),
-    default="main",
-    show_default=True,
-    help="Which volume to decrypt.",
+    default=None,
+    show_default=False,
+    help="Which volume to decrypt (auto-detect if omitted).",
 )
 @click.pass_context
 def decrypt(
@@ -199,7 +240,7 @@ def decrypt(
     password_opt: str | None,
     overwrite: bool,
     mode: str | None,
-    volume: str,
+    volume: str | None,
 ) -> None:
     password = _prompt_password(password_opt)
     out_path = output_path or container.with_suffix(container.suffix + ".out")
@@ -209,11 +250,28 @@ def decrypt(
         ctx.exit(EXIT_USAGE)
         return
 
-    code = _handle_action(
-        lambda: api.decrypt_file(
-            container, out_path, password, overwrite=overwrite, mode=mode, volume=volume
-        ),
-    )
+    if volume is None:
+        volume_result: dict[str, tuple[int, str]] = {}
+        code = _handle_action(
+            lambda: volume_result.setdefault(
+                "value",
+                api.decrypt_auto_volume(
+                    container,
+                    out_path,
+                    password=password,
+                    overwrite=overwrite,
+                    mode=mode,
+                ),
+            ),
+            invalid_password_message="[red]Неверный пароль или контейнер повреждён[/red]",
+            integrity_error_message="[red]Неверный пароль или контейнер повреждён[/red]",
+        )
+    else:
+        code = _handle_action(
+            lambda: api.decrypt_file(
+                container, out_path, password, overwrite=overwrite, mode=mode, volume=volume
+            ),
+        )
     if code == EXIT_SUCCESS:
         console.print(f"[green]Decrypted to[/green] {out_path}.")
     ctx.exit(code)
@@ -224,8 +282,14 @@ def decrypt(
     epilog="Example:\n  zilenc info secret.zil",
 )
 @click.argument("container", type=click.Path(path_type=Path))
+@click.option(
+    "--volumes/--no-volumes",
+    "show_volumes",
+    default=False,
+    help="Show per-volume details (main/decoy).",
+)
 @click.pass_context
-def info(ctx: click.Context, container: Path) -> None:
+def info(ctx: click.Context, container: Path, show_volumes: bool) -> None:
     try:
         data = container.read_bytes()
     except OSError as exc:  # noqa: BLE001
@@ -245,6 +309,7 @@ def info(ctx: click.Context, container: Path) -> None:
     payload_size = max(len(data) - header.header_len, 0)
     table = Table(show_header=False, box=None)
     table.add_row("Magic/Version", f"ZILENC / {header.version}")
+    table.add_row("Volumes", str(len(descriptors)))
     if header.key_mode == KEY_MODE_PQ_HYBRID:
         mode_label = "pq-hybrid (Kyber768 + AES-GCM)"
     elif header.key_mode == KEY_MODE_PASSWORD_ONLY:
@@ -261,23 +326,24 @@ def info(ctx: click.Context, container: Path) -> None:
     console.print("[bold]Zilant container[/bold]")
     console.print(table)
 
-    console.print("Volumes:")
-    ordered = sorted(descriptors, key=lambda d: d.volume_id)
-    for desc in ordered:
-        name = "main" if desc.volume_id == 0 else "decoy" if desc.volume_id == 1 else f"id={desc.volume_id}"
-        size = desc.payload_length if desc.payload_length else max(len(data) - desc.payload_offset - TAG_LEN, 0)
-        if desc.key_mode == KEY_MODE_PQ_HYBRID:
-            mode_label = "pq-hybrid (Kyber768 + AES-GCM)"
-        elif desc.key_mode == KEY_MODE_PASSWORD_ONLY:
-            mode_label = "password-only"
-        else:
-            mode_label = f"unknown ({desc.key_mode})"
-        console.print(
-            "  - "
-            + name
-            + f" (id={desc.volume_id}, key_mode={mode_label}, size≈{_human_size(size)}, "
-            + f"argon2: mem={desc.argon_mem_cost} KiB, time={desc.argon_time_cost}, p={desc.argon_parallelism})",
-        )
+    if show_volumes:
+        console.print("Volumes:")
+        ordered = sorted(descriptors, key=lambda d: d.volume_id)
+        for desc in ordered:
+            name = "main" if desc.volume_id == 0 else "decoy" if desc.volume_id == 1 else f"id={desc.volume_id}"
+            size = desc.payload_length if desc.payload_length else max(len(data) - desc.payload_offset - TAG_LEN, 0)
+            if desc.key_mode == KEY_MODE_PQ_HYBRID:
+                mode_label = "pq-hybrid (Kyber768 + AES-GCM)"
+            elif desc.key_mode == KEY_MODE_PASSWORD_ONLY:
+                mode_label = "password-only"
+            else:
+                mode_label = f"unknown ({desc.key_mode})"
+            console.print(
+                "  - "
+                + name
+                + f" (id={desc.volume_id}, key_mode={mode_label}, size≈{_human_size(size)}, "
+                + f"argon2: mem={desc.argon_mem_cost} KiB, time={desc.argon_time_cost}, p={desc.argon_parallelism})",
+            )
     ctx.exit(EXIT_SUCCESS)
 
 
