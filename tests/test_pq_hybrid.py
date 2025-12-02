@@ -1,4 +1,5 @@
 import os
+import os
 from pathlib import Path
 
 import pytest
@@ -45,7 +46,7 @@ def test_pq_header_fields(tmp_path: Path) -> None:
     encrypt_file(source, container, "secret", mode="pq-hybrid")
 
     with container.open("rb") as f:
-        header, _ = read_header_from_stream(f)
+        header, _descriptors, _header_bytes = read_header_from_stream(f)
     assert header.key_mode == KEY_MODE_PQ_HYBRID
     assert header.argon_mem_cost > 0
     assert header.pq_ciphertext is not None

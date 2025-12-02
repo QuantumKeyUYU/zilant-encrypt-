@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 from zilant_encrypt.container.api import decrypt_file, encrypt_file
+from zilant_encrypt.container.format import VERSION_V3, read_header_from_stream
 
 PAYLOAD_SIZE = 1024
 
@@ -23,6 +24,9 @@ def test_roundtrip(tmp_path: Path) -> None:
         password="password123",
         overwrite=False,
     )
+    with container.open("rb") as f:
+        header, _descriptors, _header_bytes = read_header_from_stream(f)
+    assert header.version == VERSION_V3
     decrypt_file(
         container,
         output,
