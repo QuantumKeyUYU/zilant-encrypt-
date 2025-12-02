@@ -13,7 +13,11 @@ from rich.table import Table
 
 from zilant_encrypt import __version__
 from zilant_encrypt.container import api
-from zilant_encrypt.container.format import KEY_MODE_PASSWORD_ONLY, KEY_MODE_PQ_HYBRID
+from zilant_encrypt.container.format import (
+    KEY_MODE_PASSWORD_ONLY,
+    KEY_MODE_PQ_HYBRID,
+    read_header_from_stream,
+)
 from zilant_encrypt.crypto import pq
 from zilant_encrypt.errors import (
     ContainerFormatError,
@@ -117,7 +121,7 @@ def _handle_action(
 )
 @click.version_option(version=_package_version(), prog_name="Zilant Encrypt")
 def cli() -> None:
-    """Secure file and directory encryption using .zil containers."""
+    """Encrypt files and folders into v3 .zil containers with password or PQ-hybrid protection."""
 
 
 @cli.command(
@@ -143,14 +147,14 @@ def cli() -> None:
     type=click.Choice(["password", "pq-hybrid"], case_sensitive=False),
     default="password",
     show_default=True,
-    help="Key protection mode.",
+    help="Key protection mode (password or pq-hybrid when liboqs/oqs is available).",
 )
 @click.option(
     "--volume",
     type=click.Choice(["main", "decoy"], case_sensitive=False),
     default="main",
     show_default=True,
-    help="Target volume (main or decoy).",
+    help="Target volume (main or decoy). For decoy, the container must already exist (v3).",
 )
 @click.option(
     "--overwrite/--no-overwrite",
@@ -247,7 +251,7 @@ def encrypt(
     type=click.Choice(["main", "decoy"], case_sensitive=False),
     default=None,
     show_default=False,
-    help="Which volume to decrypt (auto-detect if omitted).",
+    help="Which volume to decrypt (auto-detect if omitted; password decides main vs decoy).",
 )
 @click.pass_context
 def decrypt(
