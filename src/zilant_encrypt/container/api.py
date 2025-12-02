@@ -606,7 +606,7 @@ def encrypt_file(
         placeholder_ciphertext = os.urandom(PQ_PLACEHOLDER_CIPHERTEXT_LEN)
         placeholder_secret = os.urandom(PQ_PLACEHOLDER_SECRET_LEN)
         placeholder_secret_tag = os.urandom(WRAPPED_KEY_TAG_LEN)
-        reserved_bytes = os.urandom(RESERVED_LEN)
+        reserved_bytes = bytes(RESERVED_LEN)
         descriptor = VolumeDescriptor(
             volume_id=0,
             key_mode=KEY_MODE_PASSWORD_ONLY,
@@ -648,7 +648,7 @@ def encrypt_file(
 
         wrapped_key_data, wrapped_key_tag = AesGcmEncryptor.encrypt(master_key, WRAP_NONCE, file_key, b"")
         wrapped_secret, wrapped_secret_tag = AesGcmEncryptor.encrypt(password_key, WRAP_NONCE, secret_key, b"")
-        reserved_bytes = os.urandom(RESERVED_LEN)
+        reserved_bytes = bytes(RESERVED_LEN)
 
         descriptor = VolumeDescriptor(
             volume_id=0,
@@ -781,8 +781,8 @@ def encrypt_with_decoy(
             decoy_placeholder_ciphertext = os.urandom(PQ_PLACEHOLDER_CIPHERTEXT_LEN)
             decoy_placeholder_secret = os.urandom(PQ_PLACEHOLDER_SECRET_LEN)
             decoy_placeholder_tag = os.urandom(WRAPPED_KEY_TAG_LEN)
-            main_reserved = os.urandom(RESERVED_LEN)
-            decoy_reserved = os.urandom(RESERVED_LEN)
+            main_reserved = bytes(RESERVED_LEN)
+            decoy_reserved = bytes(RESERVED_LEN)
 
             descriptors.append(
                 VolumeDescriptor(
@@ -862,8 +862,8 @@ def encrypt_with_decoy(
             decoy_wrapped_secret, decoy_wrapped_secret_tag = AesGcmEncryptor.encrypt(
                 password_key_decoy, WRAP_NONCE, secret_key, b"",
             )
-            main_reserved = os.urandom(RESERVED_LEN)
-            decoy_reserved = os.urandom(RESERVED_LEN)
+            main_reserved = bytes(RESERVED_LEN)
+            decoy_reserved = bytes(RESERVED_LEN)
 
             descriptors.append(
                 VolumeDescriptor(

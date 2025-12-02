@@ -696,6 +696,40 @@ def test_cli_reports_corrupted_container(tmp_path: Path) -> None:
     assert "container is corrupted or not supported" in result.output
 
 
+def test_cli_check_flags_corrupted_header(tmp_path: Path) -> None:
+    runner = CliRunner()
+    source = tmp_path / "data.txt"
+    source.write_text("hello")
+    container = tmp_path / "corrupt_check.zil"
+
+    assert runner.invoke(cli, ["encrypt", str(source), str(container), "--password", "pw"]).exit_code == EXIT_SUCCESS
+
+    data = bytearray(container.read_bytes())
+    data[fmt.MAGIC_LEN + 6] ^= 0xFF
+    corrupted = tmp_path / "corrupt_check_copy.zil"
+    corrupted.write_bytes(data)
+
+    result = runner.invoke(cli, ["check", str(corrupted), "--password", "pw"])
+    assert result.exit_code == EXIT_CORRUPT
+    assert "corrupted" in result.output.lower()
+
+
+def test_cli_check_handles_truncated_payload(tmp_path: Path) -> None:
+    runner = CliRunner()
+    source = tmp_path / "data.txt"
+    source.write_text("hello world")
+    container = tmp_path / "trunc.zil"
+
+    assert runner.invoke(cli, ["encrypt", str(source), str(container), "--password", "pw"]).exit_code == EXIT_SUCCESS
+
+    truncated = tmp_path / "trunc_copy.zil"
+    truncated.write_bytes(container.read_bytes()[:-TAG_LEN // 2])
+
+    result = runner.invoke(cli, ["check", str(truncated), "--password", "pw"])
+    assert result.exit_code == EXIT_CORRUPT
+    assert "corrupted" in result.output.lower()
+
+
 def test_cli_pq_container_without_support(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     if not pq.available():
         pytest.skip("oqs not available")
@@ -718,5 +752,37 @@ def test_cli_pq_container_without_support(monkeypatch: pytest.MonkeyPatch, tmp_p
         cli,
         ["decrypt", str(container), str(tmp_path / "pq_out.txt"), "--password", "pw", "--mode", "pq-hybrid"],
     )
+    assert result.exit_code == EXIT_PQ_UNSUPPORTED
+    assert "requires PQ support" in result.output
+
+
+def test_cli_auto_mode_reports_missing_pq_support(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    source = tmp_path / "pq_auto.txt"
+    source.write_text("pq")
+    container = tmp_path / "pq_auto.zil"
+
+    # Build a password container, then mark the descriptor as PQ to trigger the support check when pq is unavailable.
+    assert runner.invoke(cli, ["encrypt", str(source), str(container), "--password", "pw"]).exit_code == EXIT_SUCCESS
+
+    _header, _descriptors, header_bytes = fmt.read_header_from_stream(container.open("rb"))
+    descriptor_table_offset = fmt._HEADER_STRUCT_V3_PREFIX.size
+    first_entry = bytearray(header_bytes[descriptor_table_offset : descriptor_table_offset + fmt._VOLUME_DESCRIPTOR_STRUCT.size])
+    (volume_id, _key_mode, flags, payload_offset, payload_length, meta_len) = fmt._VOLUME_DESCRIPTOR_STRUCT.unpack(first_entry)
+    pq_entry = fmt._VOLUME_DESCRIPTOR_STRUCT.pack(
+        volume_id,
+        fmt.KEY_MODE_PQ_HYBRID,
+        flags,
+        payload_offset,
+        payload_length,
+        meta_len,
+    )
+    mutated_header = bytearray(header_bytes)
+    mutated_header[descriptor_table_offset : descriptor_table_offset + fmt._VOLUME_DESCRIPTOR_STRUCT.size] = pq_entry
+    mutated = tmp_path / "pq_auto_mutated.zil"
+    mutated.write_bytes(bytes(mutated_header) + container.read_bytes()[len(header_bytes) :])
+
+    monkeypatch.setattr("zilant_encrypt.crypto.pq.available", lambda: False)
+    result = runner.invoke(cli, ["decrypt", str(mutated), str(tmp_path / "out.txt"), "--password", "pw"])
     assert result.exit_code == EXIT_PQ_UNSUPPORTED
     assert "requires PQ support" in result.output

@@ -158,6 +158,8 @@ def _validate_common_inputs(
     reserved_bytes = reserved if reserved is not None else bytes(RESERVED_LEN)
     if len(reserved_bytes) != RESERVED_LEN:
         raise ContainerFormatError("reserved must be 28 bytes")
+    if any(reserved_bytes):
+        raise ContainerFormatError("reserved bytes must be zero")
     if key_mode not in (KEY_MODE_PASSWORD_ONLY, KEY_MODE_PQ_HYBRID):
         raise ContainerFormatError("Unknown key_mode")
     return reserved_bytes
@@ -636,6 +638,8 @@ def _parse_volume_meta_common(
     end = offset + padded_len + pq_ciphertext_len + pq_wrapped_secret_len
     if len(data) < end:
         raise ContainerFormatError("Volume metadata shorter than declared lengths")
+    if any(reserved):
+        raise ContainerFormatError("Reserved bytes must be zero")
 
     wrapped_key_padded = data[offset : offset + padded_len]
     offset += padded_len
@@ -694,6 +698,8 @@ def _parse_volume_meta_password_legacy(data: bytes, header_flags: int) -> tuple[
         raise ContainerFormatError("Invalid wrapped_key_len")
 
     wrapped_key = wrapped_key_padded[:wrapped_key_len]
+    if any(reserved):
+        raise ContainerFormatError("Reserved bytes must be zero")
 
     descriptor = VolumeDescriptor(
         volume_id=0,
