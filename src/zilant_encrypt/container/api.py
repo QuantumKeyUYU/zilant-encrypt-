@@ -48,6 +48,12 @@ PAYLOAD_MAGIC = b"ZPAY"
 PAYLOAD_VERSION = 1
 PAYLOAD_META_LEN_SIZE = 4
 STREAM_CHUNK_SIZE = 1024 * 64
+ARGON_MEM_MIN_KIB = 32 * 1024
+ARGON_MEM_MAX_KIB = 2 * 1024 * 1024
+ARGON_TIME_MIN = 1
+ARGON_TIME_MAX = 10
+ARGON_PARALLELISM_MIN = 1
+ARGON_PARALLELISM_MAX = 8
 
 
 @dataclass(frozen=True)
@@ -76,6 +82,41 @@ class WrappedKey:
 class PayloadMeta:
     kind: Literal["file", "directory"]
     name: str
+
+
+def _validate_argon_params(params: Argon2Params) -> Argon2Params:
+    if not (ARGON_MEM_MIN_KIB <= params.mem_cost_kib <= ARGON_MEM_MAX_KIB):
+        raise UnsupportedFeatureError(
+            f"Argon2 memory must be between {ARGON_MEM_MIN_KIB} and {ARGON_MEM_MAX_KIB} KiB",
+        )
+    if not (ARGON_TIME_MIN <= params.time_cost <= ARGON_TIME_MAX):
+        raise UnsupportedFeatureError(
+            f"Argon2 time cost must be between {ARGON_TIME_MIN} and {ARGON_TIME_MAX}",
+        )
+    if not (ARGON_PARALLELISM_MIN <= params.parallelism <= ARGON_PARALLELISM_MAX):
+        raise UnsupportedFeatureError(
+            "Argon2 parallelism must be between "
+            f"{ARGON_PARALLELISM_MIN} and {ARGON_PARALLELISM_MAX}",
+        )
+    return params
+
+
+def resolve_argon_params(
+    *,
+    mem_kib: int | None = None,
+    time_cost: int | None = None,
+    parallelism: int | None = None,
+    base: Argon2Params | None = None,
+) -> Argon2Params:
+    """Build validated Argon2 parameters using overrides when provided."""
+
+    defaults = base or recommended_params()
+    candidate = Argon2Params(
+        mem_cost_kib=mem_kib if mem_kib is not None else defaults.mem_cost_kib,
+        time_cost=time_cost if time_cost is not None else defaults.time_cost,
+        parallelism=parallelism if parallelism is not None else defaults.parallelism,
+    )
+    return _validate_argon_params(candidate)
 
 
 @runtime_checkable
@@ -198,6 +239,9 @@ def _ciphertext_length_for_descriptor(
     all_descriptors: list[VolumeDescriptor],
     file_size: int,
 ) -> int:
+    if descriptor.payload_offset <= 0 or descriptor.payload_length < 0:
+        raise ContainerFormatError("invalid descriptor layout")
+
     if descriptor.payload_length:
         return descriptor.payload_length
 
@@ -206,8 +250,11 @@ def _ciphertext_length_for_descriptor(
         if desc.volume_id == descriptor.volume_id:
             next_offset = ordered[idx + 1].payload_offset if idx + 1 < len(ordered) else file_size
             length = next_offset - desc.payload_offset - TAG_LEN
-            return max(length, 0)
-    return 0
+            if length < 0:
+                raise ContainerFormatError("invalid descriptor layout")
+            return length
+
+    raise ContainerFormatError("invalid descriptor layout")
 
 
 class _PayloadWriter:
@@ -401,7 +448,7 @@ def _compute_volume_layouts(
 
         next_offset = ordered[idx + 1].payload_offset if idx + 1 < len(ordered) else file_size
         length = desc.payload_length or (next_offset - desc.payload_offset - TAG_LEN)
-        if length <= 0:
+        if length < 0:
             raise ContainerFormatError("Invalid payload length")
 
         end = desc.payload_offset + length + TAG_LEN
@@ -567,6 +614,7 @@ def encrypt_file(
     overwrite: bool = False,
     mode: Literal["password", "pq-hybrid"] | None = None,
     volume: Literal["main", "decoy"] = "main",
+    argon_params: Argon2Params | None = None,
 ) -> None:
     """Encrypt input file or directory into a .zil container."""
 
@@ -577,7 +625,7 @@ def encrypt_file(
     if is_new or volume == "main":
         _ensure_output(out_path, overwrite)
 
-    argon_params = recommended_params()
+    argon_params = resolve_argon_params(base=argon_params)
 
     requested_mode = mode
     if requested_mode is None and not (volume == "decoy" and not is_new):
@@ -737,6 +785,7 @@ def encrypt_with_decoy(
     input_path_decoy: os.PathLike[str] | str | None = None,
     mode: Literal["password", "pq_hybrid", "pq-hybrid"] = "password",
     overwrite: bool = False,
+    argon_params: Argon2Params | None = None,
 ) -> None:
     """Create a container with both main and decoy volumes in one call."""
 
@@ -751,7 +800,7 @@ def encrypt_with_decoy(
     if effective_mode == "pq-hybrid" and not pq.available():
         raise PqSupportError("PQ-hybrid mode is not available (oqs not installed)")
 
-    argon_params = recommended_params()
+    argon_params = resolve_argon_params(base=argon_params)
 
     with _PayloadSource(main_path) as main_payload, _PayloadSource(decoy_path) as decoy_payload:
         main_header = _build_payload_header(main_payload.meta)
@@ -1027,7 +1076,7 @@ def decrypt_file(
 
         effective_mode = mode or expected_mode
         ciphertext_len = _ciphertext_length_for_descriptor(descriptor, descriptors, file_size)
-        if ciphertext_len <= 0:
+        if ciphertext_len < 0:
             raise ContainerFormatError("Invalid payload length")
 
         if descriptor.key_mode == KEY_MODE_PASSWORD_ONLY:
@@ -1150,7 +1199,7 @@ def decrypt_auto_volume(
                 parallelism=descriptor.argon_parallelism,
             )
             ciphertext_len = _ciphertext_length_for_descriptor(descriptor, descriptors, file_size)
-            if ciphertext_len <= 0:
+            if ciphertext_len < 0:
                 raise ContainerFormatError("Invalid payload length")
 
             try:

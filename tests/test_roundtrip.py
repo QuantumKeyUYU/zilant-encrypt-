@@ -4,6 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from zilant_encrypt.crypto.kdf import Argon2Params
+from zilant_encrypt.errors import UnsupportedFeatureError
+
 from zilant_encrypt.container.api import decrypt_file, encrypt_file
 from zilant_encrypt.container.api import STREAM_CHUNK_SIZE
 from zilant_encrypt.container.format import VERSION_V3, read_header_from_stream
@@ -92,3 +95,28 @@ def test_large_file_streaming(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert output.read_bytes() == payload
     assert max(decrypt_sizes) <= STREAM_CHUNK_SIZE
     assert len(decrypt_sizes) > 1
+
+
+def test_api_honors_custom_argon_params(tmp_path: Path) -> None:
+    source = tmp_path / "argon.bin"
+    source.write_bytes(b"payload")
+    container = tmp_path / "argon.zil"
+    params = Argon2Params(mem_cost_kib=128 * 1024, time_cost=4, parallelism=2)
+
+    encrypt_file(source, container, password="pw", argon_params=params)
+
+    _header, descriptors, _bytes = read_header_from_stream(container.open("rb"))
+    desc = descriptors[0]
+    assert desc.argon_mem_cost == params.mem_cost_kib
+    assert desc.argon_time_cost == params.time_cost
+    assert desc.argon_parallelism == params.parallelism
+
+
+def test_api_rejects_unsafe_argon_params(tmp_path: Path) -> None:
+    source = tmp_path / "argon_bad.bin"
+    source.write_bytes(b"payload")
+    container = tmp_path / "argon_bad.zil"
+    params = Argon2Params(mem_cost_kib=1024, time_cost=0, parallelism=0)
+
+    with pytest.raises(UnsupportedFeatureError):
+        encrypt_file(source, container, password="pw", argon_params=params)

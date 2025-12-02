@@ -77,6 +77,17 @@ zilenc info secrets.zil --volumes
 zilenc check secrets.zil --password "s3cret"
 ```
 
+Use `info` for a high-level overview (format, Argon2 profile, PQ availability);
+use `check` as the authoritative integrity tool—it validates layout by default
+and authenticates tags when a password is provided.
+
+Advanced Argon2 tuning (optional, defaults remain 64 MiB / 3 / 1):
+
+```bash
+zilenc encrypt data.bin data.zil --password "pw" \
+  --argon-mem-kib 131072 --argon-time 4 --argon-parallelism 2
+```
+
 ## v3 container format (brief)
 
 * AES-256-GCM encrypts payloads and authenticates the plaintext header as AAD;
@@ -88,8 +99,8 @@ zilenc check secrets.zil --password "s3cret"
   is missing at runtime, containers created with password-only remain usable;
   PQ-only volumes require `oqs` and fail with exit code `5` otherwise.
 * Up to two volumes (main and optional decoy). Decoy headers mirror the main
-  structure; `zilenc info` hides decoy entries unless `--volumes` or successful
-  authentication reveals them.
+  structure; `zilenc info` reports a neutral summary by default and only lists
+  volumes when `--volumes` is provided or the matching password is supplied.
 
 ## Security notes
 

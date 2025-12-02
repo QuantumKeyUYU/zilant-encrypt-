@@ -2,6 +2,10 @@ from pathlib import Path
 
 import pytest
 
+from pathlib import Path
+
+import pytest
+
 from zilant_encrypt.container import api
 import zilant_encrypt.container.format as fmt
 from zilant_encrypt.crypto import pq
@@ -21,6 +25,29 @@ def _truncate_bytes(container: Path, keep: int) -> Path:
     truncated = container.with_name(container.name + ".trunc")
     truncated.write_bytes(container.read_bytes()[:keep])
     return truncated
+
+
+def _mutate_descriptor(
+    container: Path, *, payload_offset: int | None = None, payload_length: int | None = None
+) -> Path:
+    header, _descriptors, header_bytes = fmt.read_header_from_stream(container.open("rb"))
+    descriptor_table_offset = fmt._HEADER_STRUCT_V3_PREFIX.size
+    entry_size = fmt._VOLUME_DESCRIPTOR_STRUCT.size
+    entry = bytearray(header_bytes[descriptor_table_offset : descriptor_table_offset + entry_size])
+    (volume_id, key_mode, flags, old_offset, old_length, meta_len) = fmt._VOLUME_DESCRIPTOR_STRUCT.unpack(entry)
+    new_entry = fmt._VOLUME_DESCRIPTOR_STRUCT.pack(
+        volume_id,
+        key_mode,
+        flags,
+        payload_offset if payload_offset is not None else old_offset,
+        payload_length if payload_length is not None else old_length,
+        meta_len,
+    )
+    mutated_header = bytearray(header_bytes)
+    mutated_header[descriptor_table_offset : descriptor_table_offset + entry_size] = new_entry
+    mutated = container.with_name(container.name + ".mut")
+    mutated.write_bytes(bytes(mutated_header) + container.read_bytes()[len(header_bytes) :])
+    return mutated
 
 
 def test_api_rejects_tampered_header_aad(tmp_path: Path) -> None:
@@ -55,6 +82,43 @@ def test_api_rejects_missing_tag_and_payload_truncation(tmp_path: Path) -> None:
 
     with pytest.raises(ContainerFormatError):
         api.decrypt_file(truncated_payload, tmp_path / "out2.bin", "pw")
+
+
+def test_invalid_descriptor_offsets_fail_fast(tmp_path: Path) -> None:
+    source = tmp_path / "data.bin"
+    source.write_bytes(b"C" * 512)
+    container = tmp_path / "container.zil"
+    api.encrypt_file(source, container, "pw")
+
+    broken = _mutate_descriptor(container, payload_offset=0)
+
+    with pytest.raises(ContainerFormatError):
+        fmt.read_header_from_stream(broken.open("rb"))
+    with pytest.raises(ContainerFormatError):
+        api.check_container(broken, password=None)
+    with pytest.raises(ContainerFormatError):
+        api.decrypt_file(broken, tmp_path / "out.bin", "pw")
+
+
+def test_overlapping_layouts_detected_even_with_decoy(tmp_path: Path) -> None:
+    main = tmp_path / "main.bin"
+    decoy = tmp_path / "decoy.bin"
+    main.write_bytes(b"M" * 256)
+    decoy.write_bytes(b"D" * 256)
+    container = tmp_path / "double.zil"
+    api.encrypt_with_decoy(main, container, main_password="pw-main", decoy_password="pw-decoy")
+
+    header, _desc, _header_bytes = fmt.read_header_from_stream(container.open("rb"))
+    first_len = _desc[0].payload_length
+    overlapping = _mutate_descriptor(
+        container,
+        payload_offset=header.header_len + first_len // 2,
+    )
+
+    with pytest.raises(ContainerFormatError):
+        api.check_container(overlapping, password=None)
+    with pytest.raises(ContainerFormatError):
+        api.decrypt_auto_volume(overlapping, tmp_path / "out.bin", password="pw-main")
 
 
 @pytest.mark.skipif(not pq.available(), reason="oqs not available")

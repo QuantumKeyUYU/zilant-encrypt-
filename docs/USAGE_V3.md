@@ -76,6 +76,19 @@ zilenc encrypt decoy.bin vault.zil --password "decoy-pass" --volume decoy
   know the container was created with PQ and the local `oqs` dependency is
   installed.
 
+### Advanced Argon2 tuning
+
+Defaults remain 64 MiB memory, 3 iterations, parallelism 1. Override them when
+you need a stronger KDF profile and accept longer runtime:
+
+```bash
+zilenc encrypt secrets/ vault.zil --password "pw" \
+  --argon-mem-kib 131072 --argon-time 4 --argon-parallelism 2
+```
+
+Supported ranges: memory between 32 MiB and 2 GiB, time cost 1–10, parallelism
+1–8. Values outside these ranges are rejected.
+
 ## Inspecting containers
 
 Show header metadata without decrypting payloads:
@@ -94,8 +107,13 @@ zilenc check vault.zil --volume decoy --verbose
 ```
 
 `info` lists algorithms (AES-256-GCM, Kyber768 when present), Argon2 parameters,
-and whether PQ support is available locally. `check` reports validated volumes
-and highlights tag mismatches or truncated payloads.
+and whether PQ support is available locally. The default summary is neutral for
+decoy-aware layouts (e.g. `1 (outer; additional volumes may be present)`); add
+`--password` to authenticate a volume and `--volumes` to reveal per-volume
+details.
+
+`check` is the preferred integrity tool: it validates container layout even
+without a password and authenticates tags when credentials are supplied.
 
 ## Exit codes and common errors
 

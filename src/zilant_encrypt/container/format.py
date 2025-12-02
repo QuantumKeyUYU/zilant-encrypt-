@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 from struct import Struct
 
@@ -311,11 +311,28 @@ def _build_volume_meta(desc: VolumeDescriptor) -> bytes:
     )
 
 
-def _validate_volume_layout(descriptors: list[VolumeDescriptor]) -> None:
+def _validate_volume_layout(
+    descriptors: list[VolumeDescriptor], *, allow_empty_payload: bool = False, enforce_overlap: bool = True
+) -> None:
+    """Validate volume layout ordering and ranges.
+
+    By default, zero-length payloads are rejected. When
+    ``allow_empty_payload`` is True, zero-length payloads (offset > 0,
+    length == 0) are treated as intentionally empty volumes but are still
+    checked for ordering/overlaps.
+    """
     if len(descriptors) > MAX_VOLUMES:
         raise ContainerFormatError(f"Container has too many volumes (max {MAX_VOLUMES})")
 
-    if any(desc.payload_offset == 0 or desc.payload_length == 0 for desc in descriptors):
+    for desc in descriptors:
+        if desc.payload_offset <= 0:
+            raise ContainerFormatError("invalid descriptor layout: payload_offset must be positive")
+        if desc.payload_length < 0:
+            raise ContainerFormatError("invalid descriptor layout: payload_length cannot be negative")
+        if desc.payload_length == 0 and not allow_empty_payload:
+            raise ContainerFormatError("invalid descriptor layout: payload_length must be positive")
+
+    if not enforce_overlap:
         return
 
     ordered = sorted(descriptors, key=lambda d: d.payload_offset)
@@ -332,8 +349,6 @@ def build_header_v3(
     descriptors = list(volume_descriptors)
     if not descriptors:
         raise ContainerFormatError("At least one volume descriptor is required")
-    _validate_volume_layout(descriptors)
-
     meta_blobs = [
         _build_volume_meta(desc)
         for desc in descriptors
@@ -345,9 +360,20 @@ def build_header_v3(
         + sum(len(blob) for blob in meta_blobs)
     )
 
+    resolved_descriptors = [
+        replace(desc, payload_offset=desc.payload_offset or header_len)
+        for desc in descriptors
+    ]
+    has_placeholders = any(desc.payload_offset == 0 for desc in descriptors)
+    _validate_volume_layout(
+        resolved_descriptors,
+        allow_empty_payload=True,
+        enforce_overlap=not has_placeholders,
+    )
+
     descriptor_table = bytearray()
-    for desc, blob in zip(descriptors, meta_blobs):
-        payload_offset = desc.payload_offset or header_len
+    for desc, blob in zip(resolved_descriptors, meta_blobs):
+        payload_offset = desc.payload_offset
         descriptor_table.extend(
             _VOLUME_DESCRIPTOR_STRUCT.pack(
                 desc.volume_id,
@@ -861,7 +887,7 @@ def parse_header_v3(data: bytes) -> tuple[ContainerHeader, list[VolumeDescriptor
     if not descriptors:
         raise ContainerFormatError("No descriptors found")
 
-    _validate_volume_layout(descriptors)
+    _validate_volume_layout(descriptors, allow_empty_payload=True)
 
     main = descriptors[0]
     header = ContainerHeader(
