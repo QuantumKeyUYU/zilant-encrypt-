@@ -4,6 +4,7 @@ import pytest
 
 from zilant_encrypt.container import api
 from zilant_encrypt.errors import ContainerFormatError, InvalidPassword, UnsupportedFeatureError
+from zilant_encrypt.crypto import pq
 
 
 def test_main_and_decoy_roundtrip_password_only(tmp_path: Path) -> None:
@@ -48,3 +49,45 @@ def test_decoy_requires_existing_v3_container(tmp_path: Path) -> None:
 
     with pytest.raises(UnsupportedFeatureError):
         api.decrypt_file(out_path, tmp_path / "missing.txt", "pw2", volume="decoy", mode="pq-hybrid")
+
+
+def test_decoy_must_match_main_key_mode(tmp_path: Path) -> None:
+    payload = tmp_path / "data.txt"
+    payload.write_text("hello")
+    container = tmp_path / "vault.zil"
+
+    api.encrypt_file(payload, container, "pw", volume="main", mode="password")
+    with pytest.raises(UnsupportedFeatureError):
+        api.encrypt_file(payload, container, "pw", volume="decoy", mode="pq-hybrid")
+
+    if not pq.available():
+        pytest.skip("oqs not available")
+
+    pq_container = tmp_path / "pq.zil"
+    api.encrypt_file(payload, pq_container, "pw", volume="main", mode="pq-hybrid")
+    with pytest.raises(UnsupportedFeatureError):
+        api.encrypt_file(payload, pq_container, "pw", volume="decoy", mode="password")
+
+
+def test_encrypt_decrypt_pq_main_and_decoy(tmp_path: Path) -> None:
+    if not pq.available():
+        pytest.skip("oqs not available")
+
+    main_data = tmp_path / "main.txt"
+    decoy_data = tmp_path / "decoy.txt"
+    main_data.write_text("MAIN")
+    decoy_data.write_text("DECOY")
+
+    container = tmp_path / "pq_multi.zil"
+
+    api.encrypt_file(main_data, container, "pw-main", volume="main", mode="pq-hybrid")
+    api.encrypt_file(decoy_data, container, "pw-decoy", volume="decoy", mode="pq-hybrid")
+
+    main_out = tmp_path / "main_out.txt"
+    decoy_out = tmp_path / "decoy_out.txt"
+
+    api.decrypt_file(container, main_out, "pw-main", volume="main")
+    api.decrypt_file(container, decoy_out, "pw-decoy", volume="decoy")
+
+    assert main_out.read_text() == "MAIN"
+    assert decoy_out.read_text() == "DECOY"

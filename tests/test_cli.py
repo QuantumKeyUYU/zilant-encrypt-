@@ -4,6 +4,7 @@ import pytest
 from click.testing import CliRunner
 
 from zilant_encrypt.cli import EXIT_CRYPTO, EXIT_FS, EXIT_SUCCESS, EXIT_USAGE, cli
+from zilant_encrypt.crypto import pq
 
 
 def test_cli_encrypt_decrypt_file(tmp_path: Path) -> None:
@@ -116,3 +117,170 @@ def test_cli_pq_mode_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
         ["encrypt", str(source), str(tmp_path / "out.zil"), "--password", "pw", "--mode", "pq-hybrid"],
     )
     assert result.exit_code == EXIT_USAGE
+
+
+def test_cli_prevents_mode_mismatch(tmp_path: Path) -> None:
+    runner = CliRunner()
+    source = tmp_path / "src.txt"
+    source.write_text("hello")
+    container = tmp_path / "out.zil"
+
+    result = runner.invoke(cli, ["encrypt", str(source), str(container), "--password", "pw"])
+    assert result.exit_code == EXIT_SUCCESS
+
+    result = runner.invoke(
+        cli,
+        [
+            "encrypt",
+            str(source),
+            str(container),
+            "--password",
+            "pw",
+            "--mode",
+            "pq-hybrid",
+            "--volume",
+            "decoy",
+        ],
+    )
+    assert result.exit_code != EXIT_SUCCESS
+
+
+def test_cli_encrypt_decrypt_pq_with_volumes(tmp_path: Path) -> None:
+    if not pq.available():
+        pytest.skip("oqs not available")
+
+    runner = CliRunner()
+    main_src = tmp_path / "main.txt"
+    decoy_src = tmp_path / "decoy.txt"
+    main_src.write_text("MAIN")
+    decoy_src.write_text("DECOY")
+    container = tmp_path / "pq_cli.zil"
+
+    result = runner.invoke(
+        cli,
+        [
+            "encrypt",
+            str(main_src),
+            str(container),
+            "--password",
+            "pw-main",
+            "--mode",
+            "pq-hybrid",
+            "--volume",
+            "main",
+        ],
+    )
+    assert result.exit_code == EXIT_SUCCESS
+
+    result = runner.invoke(
+        cli,
+        [
+            "encrypt",
+            str(decoy_src),
+            str(container),
+            "--password",
+            "pw-decoy",
+            "--mode",
+            "pq-hybrid",
+            "--volume",
+            "decoy",
+        ],
+    )
+    assert result.exit_code == EXIT_SUCCESS
+
+    main_out = tmp_path / "main_out.txt"
+    decoy_out = tmp_path / "decoy_out.txt"
+
+    result = runner.invoke(
+        cli,
+        [
+            "decrypt",
+            str(container),
+            str(main_out),
+            "--password",
+            "pw-main",
+            "--mode",
+            "pq-hybrid",
+            "--volume",
+            "main",
+        ],
+    )
+    assert result.exit_code == EXIT_SUCCESS
+    assert main_out.read_text() == "MAIN"
+
+    result = runner.invoke(
+        cli,
+        [
+            "decrypt",
+            str(container),
+            str(decoy_out),
+            "--password",
+            "pw-decoy",
+            "--mode",
+            "pq-hybrid",
+            "--volume",
+            "decoy",
+        ],
+    )
+    assert result.exit_code == EXIT_SUCCESS
+    assert decoy_out.read_text() == "DECOY"
+
+
+def test_cli_info_outputs_modes(tmp_path: Path) -> None:
+    runner = CliRunner()
+    main_src = tmp_path / "main.txt"
+    decoy_src = tmp_path / "decoy.txt"
+    main_src.write_text("MAIN")
+    decoy_src.write_text("DECOY")
+    container = tmp_path / "info.zil"
+
+    assert runner.invoke(cli, ["encrypt", str(main_src), str(container), "--password", "pw-main"]).exit_code == EXIT_SUCCESS
+    assert (
+        runner.invoke(
+            cli,
+            [
+                "encrypt",
+                str(decoy_src),
+                str(container),
+                "--password",
+                "pw-decoy",
+                "--volume",
+                "decoy",
+            ],
+        ).exit_code
+        == EXIT_SUCCESS
+    )
+
+    result = runner.invoke(cli, ["info", str(container)])
+    assert "main" in result.output
+    assert "password-only" in result.output
+    assert "decoy" in result.output
+
+
+def test_cli_info_outputs_pq_mode(tmp_path: Path) -> None:
+    if not pq.available():
+        pytest.skip("oqs not available")
+
+    runner = CliRunner()
+    source = tmp_path / "source.txt"
+    source.write_text("hello")
+    container = tmp_path / "pq_info.zil"
+
+    assert (
+        runner.invoke(
+            cli,
+            [
+                "encrypt",
+                str(source),
+                str(container),
+                "--password",
+                "pw",
+                "--mode",
+                "pq-hybrid",
+            ],
+        ).exit_code
+        == EXIT_SUCCESS
+    )
+
+    result = runner.invoke(cli, ["info", str(container)])
+    assert "pq-hybrid" in result.output
