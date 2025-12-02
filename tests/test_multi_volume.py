@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from zilant_encrypt.container import api
+import zilant_encrypt.container.format as fmt
 from zilant_encrypt.container.format import (
     KEY_MODE_PASSWORD_ONLY,
     KEY_MODE_PQ_HYBRID,
@@ -182,6 +183,70 @@ def test_encrypt_with_decoy_helper_roundtrip_pq(tmp_path: Path) -> None:
     assert len(descriptors) >= 2
     assert all(d.key_mode == descriptors[0].key_mode for d in descriptors)
     assert descriptors[0].key_mode == KEY_MODE_PQ_HYBRID
+
+
+def test_v3_metadata_layout_uniform_with_decoy(tmp_path: Path) -> None:
+    main_data = tmp_path / "main.txt"
+    decoy_data = tmp_path / "decoy.txt"
+    main_data.write_text("MAIN")
+    decoy_data.write_text("DECOY")
+
+    container = tmp_path / "layout.zil"
+
+    api.encrypt_with_decoy(
+        main_data,
+        container,
+        main_password="main-pass",
+        decoy_password="decoy-pass",
+        input_path_decoy=decoy_data,
+        mode="password",
+        overwrite=True,
+    )
+
+    with container.open("rb") as f:
+        _header, descriptors, header_bytes = read_header_from_stream(f)
+
+    assert len(descriptors) == 2
+    prefix = fmt._HEADER_STRUCT_V3_PREFIX.size
+    meta0 = fmt._VOLUME_DESCRIPTOR_STRUCT.unpack(
+        header_bytes[prefix : prefix + fmt._VOLUME_DESCRIPTOR_STRUCT.size]
+    )[-1]
+    meta1 = fmt._VOLUME_DESCRIPTOR_STRUCT.unpack(
+        header_bytes[prefix + fmt._VOLUME_DESCRIPTOR_STRUCT.size : prefix + 2 * fmt._VOLUME_DESCRIPTOR_STRUCT.size]
+    )[-1]
+    assert meta0 == meta1
+
+    assert descriptors[0].pq_ciphertext is not None and descriptors[1].pq_ciphertext is not None
+    assert len(descriptors[0].pq_ciphertext) == len(descriptors[1].pq_ciphertext) > 0
+    assert descriptors[0].pq_wrapped_secret is not None and descriptors[1].pq_wrapped_secret is not None
+    assert len(descriptors[0].pq_wrapped_secret) == len(descriptors[1].pq_wrapped_secret) > 0
+
+    if pq.available():
+        pq_container = tmp_path / "layout_pq.zil"
+        api.encrypt_with_decoy(
+            main_data,
+            pq_container,
+            main_password="main-pass",
+            decoy_password="decoy-pass",
+            input_path_decoy=decoy_data,
+            mode="pq-hybrid",
+            overwrite=True,
+        )
+        with pq_container.open("rb") as f:
+            _pq_header, pq_descriptors, pq_header_bytes = read_header_from_stream(f)
+
+        pq_prefix = fmt._HEADER_STRUCT_V3_PREFIX.size
+        pq_meta0 = fmt._VOLUME_DESCRIPTOR_STRUCT.unpack(
+            pq_header_bytes[pq_prefix : pq_prefix + fmt._VOLUME_DESCRIPTOR_STRUCT.size]
+        )[-1]
+        pq_meta1 = fmt._VOLUME_DESCRIPTOR_STRUCT.unpack(
+            pq_header_bytes[
+                pq_prefix + fmt._VOLUME_DESCRIPTOR_STRUCT.size : pq_prefix + 2 * fmt._VOLUME_DESCRIPTOR_STRUCT.size
+            ]
+        )[-1]
+        assert pq_meta0 == pq_meta1
+        assert len(pq_descriptors[0].pq_ciphertext or b"") == len(pq_descriptors[1].pq_ciphertext or b"")
+        assert len(pq_descriptors[0].pq_wrapped_secret or b"") == len(pq_descriptors[1].pq_wrapped_secret or b"")
 
 
 def test_corrupted_header_bytes_fail_integrity(tmp_path: Path) -> None:

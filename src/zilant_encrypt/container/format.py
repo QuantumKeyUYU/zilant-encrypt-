@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from struct import Struct
 
 from typing import Iterable
@@ -39,6 +40,10 @@ _HEADER_STRUCT_V2 = Struct(
     "<6sBBH16sIII12sH16sHH16sH",
 )
 
+_VOLUME_META_V3_COMMON_STRUCT = Struct(
+    "<H16sIII12sH16sHH16s28s",
+)
+
 _VOLUME_META_V3_PASSWORD_STRUCT = Struct(
     "<H16sIII12sH32s16s28s",
 )
@@ -46,6 +51,9 @@ _VOLUME_META_V3_PASSWORD_STRUCT = Struct(
 _VOLUME_META_V3_PQ_STRUCT = Struct(
     "<H16sIII12sH16sHH16s",
 )
+
+PQ_PLACEHOLDER_CIPHERTEXT_LEN = 1088
+PQ_PLACEHOLDER_SECRET_LEN = 2400
 
 _HEADER_STRUCT_V3_PREFIX = Struct("<6sBHI")
 _VOLUME_DESCRIPTOR_STRUCT = Struct("<BBHQQI")
@@ -254,50 +262,49 @@ def _build_volume_meta(desc: VolumeDescriptor) -> bytes:
         key_mode=desc.key_mode,
     )
 
-    if desc.key_mode == KEY_MODE_PASSWORD_ONLY:
-        wrapped_key_padded = desc.wrapped_key.ljust(32, b"\x00")
-        return _VOLUME_META_V3_PASSWORD_STRUCT.pack(
-            desc.flags,
-            desc.salt_argon2,
-            desc.argon_mem_cost,
-            desc.argon_time_cost,
-            desc.argon_parallelism,
-            desc.nonce_aes_gcm,
-            len(desc.wrapped_key),
-            wrapped_key_padded,
-            desc.wrapped_key_tag,
-            reserved_bytes,
-        )
+    pq_ciphertext = desc.pq_ciphertext
+    pq_wrapped_secret = desc.pq_wrapped_secret
+    pq_wrapped_secret_tag = desc.pq_wrapped_secret_tag
 
-    if desc.key_mode != KEY_MODE_PQ_HYBRID:
-        raise ContainerFormatError("Unsupported key mode for v3 header")
-    if (
-        desc.pq_ciphertext is None
-        or desc.pq_wrapped_secret is None
-        or desc.pq_wrapped_secret_tag is None
-    ):
-        raise ContainerFormatError("PQ volume is missing required fields")
-    if len(desc.pq_wrapped_secret_tag) != WRAPPED_KEY_TAG_LEN:
+    if desc.key_mode == KEY_MODE_PQ_HYBRID:
+        if (
+            pq_ciphertext is None
+            or pq_wrapped_secret is None
+            or pq_wrapped_secret_tag is None
+        ):
+            raise ContainerFormatError("PQ volume is missing required fields")
+    else:
+        pq_ciphertext = pq_ciphertext or os.urandom(PQ_PLACEHOLDER_CIPHERTEXT_LEN)
+        pq_wrapped_secret = pq_wrapped_secret or os.urandom(PQ_PLACEHOLDER_SECRET_LEN)
+        pq_wrapped_secret_tag = pq_wrapped_secret_tag or os.urandom(WRAPPED_KEY_TAG_LEN)
+
+    if pq_wrapped_secret_tag is None or len(pq_wrapped_secret_tag) != WRAPPED_KEY_TAG_LEN:
         raise ContainerFormatError("pq_wrapped_secret_tag must be 16 bytes")
+
+    wrapped_key_len = len(desc.wrapped_key)
+    if wrapped_key_len > WRAPPED_KEY_MAX_LEN:
+        raise ContainerFormatError("Invalid wrapped_key_len")
+    wrapped_key_padded = desc.wrapped_key.ljust(WRAPPED_KEY_MAX_LEN, b"\x00")
 
     return b"".join(
         [
-            _VOLUME_META_V3_PQ_STRUCT.pack(
+            _VOLUME_META_V3_COMMON_STRUCT.pack(
                 desc.flags,
                 desc.salt_argon2,
                 desc.argon_mem_cost,
                 desc.argon_time_cost,
                 desc.argon_parallelism,
                 desc.nonce_aes_gcm,
-                len(desc.wrapped_key),
+                wrapped_key_len,
                 desc.wrapped_key_tag,
-                len(desc.pq_ciphertext),
-                len(desc.pq_wrapped_secret),
-                desc.pq_wrapped_secret_tag,
+                len(pq_ciphertext or b""),
+                len(pq_wrapped_secret or b""),
+                pq_wrapped_secret_tag,
+                reserved_bytes,
             ),
-            desc.wrapped_key,
-            desc.pq_ciphertext,
-            desc.pq_wrapped_secret,
+            wrapped_key_padded,
+            pq_ciphertext or b"",
+            pq_wrapped_secret or b"",
         ]
     )
 
@@ -592,7 +599,74 @@ def header_aad(header_bytes: bytes) -> bytes:
     return header_bytes[MAGIC_LEN + VERSION_LEN :]
 
 
-def _parse_volume_meta_password(data: bytes, header_flags: int) -> tuple[VolumeDescriptor, int]:
+def _parse_volume_meta_common(
+    data: bytes, header_flags: int, key_mode: int
+) -> tuple[VolumeDescriptor, int]:
+    if len(data) < _VOLUME_META_V3_COMMON_STRUCT.size:
+        raise ContainerFormatError("Volume metadata too small for v3")
+
+    (
+        flags,
+        salt_argon2,
+        argon_mem_cost,
+        argon_time_cost,
+        argon_parallelism,
+        nonce_aes_gcm,
+        wrapped_key_len,
+        wrapped_key_tag,
+        pq_ciphertext_len,
+        pq_wrapped_secret_len,
+        pq_wrapped_secret_tag,
+        reserved,
+    ) = _VOLUME_META_V3_COMMON_STRUCT.unpack(
+        data[: _VOLUME_META_V3_COMMON_STRUCT.size]
+    )
+
+    if flags != header_flags:
+        header_flags = flags
+    if header_flags != 0:
+        raise UnsupportedFeatureError("Header flags set for unsupported features")
+    if not (0 <= wrapped_key_len <= WRAPPED_KEY_MAX_LEN):
+        raise ContainerFormatError("Invalid wrapped_key_len")
+    if len(pq_wrapped_secret_tag) != WRAPPED_KEY_TAG_LEN:
+        raise ContainerFormatError("Invalid PQ tag length")
+
+    offset = _VOLUME_META_V3_COMMON_STRUCT.size
+    padded_len = max(WRAPPED_KEY_MAX_LEN, wrapped_key_len)
+    end = offset + padded_len + pq_ciphertext_len + pq_wrapped_secret_len
+    if len(data) < end:
+        raise ContainerFormatError("Volume metadata shorter than declared lengths")
+
+    wrapped_key_padded = data[offset : offset + padded_len]
+    offset += padded_len
+    wrapped_key = wrapped_key_padded[:wrapped_key_len]
+    pq_ciphertext = data[offset : offset + pq_ciphertext_len]
+    offset += pq_ciphertext_len
+    pq_wrapped_secret = data[offset : offset + pq_wrapped_secret_len]
+    offset += pq_wrapped_secret_len
+
+    descriptor = VolumeDescriptor(
+        volume_id=0,
+        key_mode=key_mode,
+        flags=header_flags,
+        payload_offset=0,
+        payload_length=0,
+        salt_argon2=salt_argon2,
+        argon_mem_cost=argon_mem_cost,
+        argon_time_cost=argon_time_cost,
+        argon_parallelism=argon_parallelism,
+        nonce_aes_gcm=nonce_aes_gcm,
+        wrapped_key=wrapped_key,
+        wrapped_key_tag=wrapped_key_tag,
+        reserved=reserved,
+        pq_ciphertext=pq_ciphertext if pq_ciphertext_len else None,
+        pq_wrapped_secret=pq_wrapped_secret if pq_wrapped_secret_len else None,
+        pq_wrapped_secret_tag=pq_wrapped_secret_tag,
+    )
+    return descriptor, end
+
+
+def _parse_volume_meta_password_legacy(data: bytes, header_flags: int) -> tuple[VolumeDescriptor, int]:
     if len(data) < _VOLUME_META_V3_PASSWORD_STRUCT.size:
         raise ContainerFormatError("Volume metadata too small for password mode")
 
@@ -618,8 +692,6 @@ def _parse_volume_meta_password(data: bytes, header_flags: int) -> tuple[VolumeD
 
     if not (0 <= wrapped_key_len <= WRAPPED_KEY_MAX_LEN):
         raise ContainerFormatError("Invalid wrapped_key_len")
-    if any(reserved):
-        raise UnsupportedFeatureError("Reserved header bytes are non-zero")
 
     wrapped_key = wrapped_key_padded[:wrapped_key_len]
 
@@ -641,7 +713,7 @@ def _parse_volume_meta_password(data: bytes, header_flags: int) -> tuple[VolumeD
     return descriptor, _VOLUME_META_V3_PASSWORD_STRUCT.size
 
 
-def _parse_volume_meta_pq(data: bytes, header_flags: int) -> tuple[VolumeDescriptor, int]:
+def _parse_volume_meta_pq_legacy(data: bytes, header_flags: int) -> tuple[VolumeDescriptor, int]:
     if len(data) < _VOLUME_META_V3_PQ_STRUCT.size:
         raise ContainerFormatError("Volume metadata too small for pq mode")
 
@@ -743,12 +815,15 @@ def parse_header_v3(data: bytes) -> tuple[ContainerHeader, list[VolumeDescriptor
         if len(meta_data) != meta_len:
             raise ContainerFormatError("Volume metadata shorter than declared")
 
-        if key_mode == KEY_MODE_PASSWORD_ONLY:
-            descriptor, consumed = _parse_volume_meta_password(meta_data, flags)
-        elif key_mode == KEY_MODE_PQ_HYBRID:
-            descriptor, consumed = _parse_volume_meta_pq(meta_data, flags)
-        else:
-            raise UnsupportedFeatureError("Unsupported key mode")
+        try:
+            descriptor, consumed = _parse_volume_meta_common(meta_data, flags, key_mode)
+        except (ContainerFormatError, UnsupportedFeatureError):
+            if key_mode == KEY_MODE_PASSWORD_ONLY:
+                descriptor, consumed = _parse_volume_meta_password_legacy(meta_data, flags)
+            elif key_mode == KEY_MODE_PQ_HYBRID:
+                descriptor, consumed = _parse_volume_meta_pq_legacy(meta_data, flags)
+            else:
+                raise UnsupportedFeatureError("Unsupported key mode")
 
         if consumed != meta_len:
             raise ContainerFormatError("Volume metadata length mismatch")

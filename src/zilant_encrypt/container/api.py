@@ -20,7 +20,10 @@ from zilant_encrypt.container.format import (
     HEADER_V1_LEN,
     KEY_MODE_PASSWORD_ONLY,
     KEY_MODE_PQ_HYBRID,
+    PQ_PLACEHOLDER_CIPHERTEXT_LEN,
+    PQ_PLACEHOLDER_SECRET_LEN,
     RESERVED_LEN,
+    WRAPPED_KEY_TAG_LEN,
     VERSION_PQ_HYBRID,
     VERSION_V1,
     VERSION_V3,
@@ -35,6 +38,7 @@ from zilant_encrypt.errors import (
     ContainerFormatError,
     IntegrityError,
     InvalidPassword,
+    PqSupportError,
     UnsupportedFeatureError,
 )
 
@@ -384,7 +388,7 @@ def encrypt_file(
         raise UnsupportedFeatureError(f"Unknown encryption mode: {requested_mode}")
 
     if requested_mode == "pq-hybrid" and not pq.available():
-        raise UnsupportedFeatureError("PQ-hybrid mode is not available (oqs not installed)")
+        raise PqSupportError("PQ-hybrid mode is not available (oqs not installed)")
 
     if volume == "decoy":
         raise UnsupportedFeatureError(
@@ -400,6 +404,10 @@ def encrypt_file(
     if mode == "password":
         provider = _PasswordOnlyProviderFactory(password, argon_params, salt).build()
         wrapped_key = provider.wrap_file_key(file_key)
+        placeholder_ciphertext = os.urandom(PQ_PLACEHOLDER_CIPHERTEXT_LEN)
+        placeholder_secret = os.urandom(PQ_PLACEHOLDER_SECRET_LEN)
+        placeholder_secret_tag = os.urandom(WRAPPED_KEY_TAG_LEN)
+        reserved_bytes = os.urandom(RESERVED_LEN)
         descriptor = VolumeDescriptor(
             volume_id=0,
             key_mode=KEY_MODE_PASSWORD_ONLY,
@@ -413,11 +421,14 @@ def encrypt_file(
             nonce_aes_gcm=nonce,
             wrapped_key=wrapped_key.data,
             wrapped_key_tag=wrapped_key.tag,
-            reserved=bytes(RESERVED_LEN),
+            reserved=reserved_bytes,
+            pq_ciphertext=placeholder_ciphertext,
+            pq_wrapped_secret=placeholder_secret,
+            pq_wrapped_secret_tag=placeholder_secret_tag,
         )
     elif mode == "pq-hybrid":
         if not pq.available():
-            raise UnsupportedFeatureError("PQ-hybrid mode is not available (oqs not installed)")
+            raise PqSupportError("PQ-hybrid mode is not available (oqs not installed)")
         password_key = derive_key_from_password(
             password,
             salt,
@@ -438,6 +449,7 @@ def encrypt_file(
 
         wrapped_key_data, wrapped_key_tag = AesGcmEncryptor.encrypt(master_key, WRAP_NONCE, file_key, b"")
         wrapped_secret, wrapped_secret_tag = AesGcmEncryptor.encrypt(password_key, WRAP_NONCE, secret_key, b"")
+        reserved_bytes = os.urandom(RESERVED_LEN)
 
         descriptor = VolumeDescriptor(
             volume_id=0,
@@ -452,7 +464,7 @@ def encrypt_file(
             nonce_aes_gcm=nonce,
             wrapped_key=wrapped_key_data,
             wrapped_key_tag=wrapped_key_tag,
-            reserved=bytes(RESERVED_LEN),
+            reserved=reserved_bytes,
             pq_ciphertext=kem_ciphertext,
             pq_wrapped_secret=wrapped_secret,
             pq_wrapped_secret_tag=wrapped_secret_tag,
@@ -538,7 +550,7 @@ def encrypt_with_decoy(
 
     effective_mode = "pq-hybrid" if mode == "pq_hybrid" else mode
     if effective_mode == "pq-hybrid" and not pq.available():
-        raise UnsupportedFeatureError("PQ-hybrid mode is not available (oqs not installed)")
+        raise PqSupportError("PQ-hybrid mode is not available (oqs not installed)")
 
     argon_params = recommended_params()
 
@@ -564,6 +576,14 @@ def encrypt_with_decoy(
             main_wrapped = main_provider.wrap_file_key(main_file_key)
             decoy_provider = _PasswordOnlyProviderFactory(decoy_password, argon_params, decoy_salt).build()
             decoy_wrapped = decoy_provider.wrap_file_key(decoy_file_key)
+            main_placeholder_ciphertext = os.urandom(PQ_PLACEHOLDER_CIPHERTEXT_LEN)
+            main_placeholder_secret = os.urandom(PQ_PLACEHOLDER_SECRET_LEN)
+            main_placeholder_tag = os.urandom(WRAPPED_KEY_TAG_LEN)
+            decoy_placeholder_ciphertext = os.urandom(PQ_PLACEHOLDER_CIPHERTEXT_LEN)
+            decoy_placeholder_secret = os.urandom(PQ_PLACEHOLDER_SECRET_LEN)
+            decoy_placeholder_tag = os.urandom(WRAPPED_KEY_TAG_LEN)
+            main_reserved = os.urandom(RESERVED_LEN)
+            decoy_reserved = os.urandom(RESERVED_LEN)
 
             descriptors.append(
                 VolumeDescriptor(
@@ -579,7 +599,10 @@ def encrypt_with_decoy(
                     nonce_aes_gcm=main_nonce,
                     wrapped_key=main_wrapped.data,
                     wrapped_key_tag=main_wrapped.tag,
-                    reserved=bytes(RESERVED_LEN),
+                    reserved=main_reserved,
+                    pq_ciphertext=main_placeholder_ciphertext,
+                    pq_wrapped_secret=main_placeholder_secret,
+                    pq_wrapped_secret_tag=main_placeholder_tag,
                 )
             )
             descriptors.append(
@@ -596,7 +619,10 @@ def encrypt_with_decoy(
                     nonce_aes_gcm=decoy_nonce,
                     wrapped_key=decoy_wrapped.data,
                     wrapped_key_tag=decoy_wrapped.tag,
-                    reserved=bytes(RESERVED_LEN),
+                    reserved=decoy_reserved,
+                    pq_ciphertext=decoy_placeholder_ciphertext,
+                    pq_wrapped_secret=decoy_placeholder_secret,
+                    pq_wrapped_secret_tag=decoy_placeholder_tag,
                 )
             )
         else:
@@ -637,6 +663,8 @@ def encrypt_with_decoy(
             decoy_wrapped_secret, decoy_wrapped_secret_tag = AesGcmEncryptor.encrypt(
                 password_key_decoy, WRAP_NONCE, secret_key, b"",
             )
+            main_reserved = os.urandom(RESERVED_LEN)
+            decoy_reserved = os.urandom(RESERVED_LEN)
 
             descriptors.append(
                 VolumeDescriptor(
@@ -652,7 +680,7 @@ def encrypt_with_decoy(
                     nonce_aes_gcm=main_nonce,
                     wrapped_key=main_wrapped_key,
                     wrapped_key_tag=main_wrapped_tag,
-                    reserved=bytes(RESERVED_LEN),
+                    reserved=main_reserved,
                     pq_ciphertext=kem_ciphertext,
                     pq_wrapped_secret=wrapped_secret,
                     pq_wrapped_secret_tag=wrapped_secret_tag,
@@ -672,7 +700,7 @@ def encrypt_with_decoy(
                     nonce_aes_gcm=decoy_nonce,
                     wrapped_key=decoy_wrapped_key,
                     wrapped_key_tag=decoy_wrapped_tag,
-                    reserved=bytes(RESERVED_LEN),
+                    reserved=decoy_reserved,
                     pq_ciphertext=kem_ciphertext,
                     pq_wrapped_secret=decoy_wrapped_secret,
                     pq_wrapped_secret_tag=decoy_wrapped_secret_tag,
@@ -814,7 +842,7 @@ def decrypt_file(
             if effective_mode != "pq-hybrid":
                 raise UnsupportedFeatureError("requested decrypt mode does not match volume key_mode")
             if not pq.available():
-                raise UnsupportedFeatureError("PQ-hybrid containers require oqs support")
+                raise PqSupportError("PQ-hybrid containers require oqs support")
             password_key = derive_key_from_password(
                 password,
                 descriptor.salt_argon2,
@@ -938,7 +966,7 @@ def decrypt_auto_volume(
                     if effective_mode is not None and effective_mode != "pq-hybrid":
                         continue
                     if not pq.available():
-                        raise UnsupportedFeatureError("PQ-hybrid containers require oqs support")
+                        raise PqSupportError("PQ-hybrid containers require oqs support")
                     if (
                         descriptor.pq_wrapped_secret is None
                         or descriptor.pq_ciphertext is None
