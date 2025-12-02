@@ -19,3 +19,7 @@ class IntegrityError(ZilantEncryptError):
 
 class UnsupportedFeatureError(ZilantEncryptError):
     """Feature is reserved for future versions."""
+
+
+class PqSupportError(UnsupportedFeatureError):
+    """Container requires PQ support that is not available."""

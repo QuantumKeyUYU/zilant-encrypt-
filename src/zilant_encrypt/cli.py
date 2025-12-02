@@ -25,6 +25,7 @@ from zilant_encrypt.errors import (
     ContainerFormatError,
     IntegrityError,
     InvalidPassword,
+    PqSupportError,
     UnsupportedFeatureError,
 )
 
@@ -32,6 +33,8 @@ EXIT_SUCCESS = 0
 EXIT_USAGE = 1
 EXIT_CRYPTO = 2
 EXIT_FS = 3
+EXIT_CORRUPT = 4
+EXIT_PQ_UNSUPPORTED = 5
 
 console = Console()
 
@@ -66,16 +69,19 @@ def _handle_action(
     try:
         action()
     except InvalidPassword:
-        message = invalid_password_message or "[red]Invalid password.[/red]"
+        message = invalid_password_message or "[red]Invalid password or key[/red]"
         console.print(message)
         return EXIT_CRYPTO
-    except IntegrityError:
-        message = integrity_error_message or "[red]Error: container is damaged or not supported.[/red]"
+    except (IntegrityError, ContainerFormatError):
+        message = integrity_error_message or "[red]Error: container is corrupted or not supported[/red]"
         console.print(message)
-        return EXIT_CRYPTO
-    except (ContainerFormatError, UnsupportedFeatureError) as exc:
+        return EXIT_CORRUPT
+    except PqSupportError:
+        console.print("[red]Error: container requires PQ support that is not available[/red]")
+        return EXIT_PQ_UNSUPPORTED
+    except UnsupportedFeatureError as exc:
         console.print(f"[red]Unsupported or invalid container:[/red] {exc}")
-        return EXIT_CRYPTO
+        return EXIT_USAGE
     except FileExistsError as exc:
         console.print(f"[red]{exc}. Use --overwrite to replace.[/red]")
         return EXIT_FS
@@ -156,8 +162,8 @@ def encrypt(
     target = output_path or input_path.with_suffix(f"{input_path.suffix}.zil")
 
     if mode == "pq-hybrid" and not pq.available():
-        console.print("[red]PQ-hybrid режим недоступен (oqs не установлен).[/red]")
-        ctx.exit(EXIT_USAGE)
+        console.print("[red]Error: container requires PQ support that is not available[/red]")
+        ctx.exit(EXIT_PQ_UNSUPPORTED)
         return
 
     if decoy_password_opt:
@@ -246,8 +252,8 @@ def decrypt(
     out_path = output_path or container.with_suffix(container.suffix + ".out")
 
     if mode == "pq-hybrid" and not pq.available():
-        console.print("[red]PQ-hybrid mode requires the 'oqs' library; install it or use password-only mode.[/red]")
-        ctx.exit(EXIT_USAGE)
+        console.print("[red]Error: container requires PQ support that is not available[/red]")
+        ctx.exit(EXIT_PQ_UNSUPPORTED)
         return
 
     if volume is None:
@@ -263,8 +269,8 @@ def decrypt(
                     mode=mode,
                 ),
             ),
-            invalid_password_message="[red]Неверный пароль или контейнер повреждён[/red]",
-            integrity_error_message="[red]Неверный пароль или контейнер повреждён[/red]",
+            invalid_password_message="[red]Invalid password or key[/red]",
+            integrity_error_message="[red]Error: container is corrupted or not supported[/red]",
         )
     else:
         code = _handle_action(
@@ -286,7 +292,7 @@ def decrypt(
     "--volumes/--no-volumes",
     "show_volumes",
     default=False,
-    help="Show per-volume details (main/decoy).",
+    help="Show verbose per-volume details.",
 )
 @click.pass_context
 def info(ctx: click.Context, container: Path, show_volumes: bool) -> None:
@@ -306,20 +312,24 @@ def info(ctx: click.Context, container: Path, show_volumes: bool) -> None:
         ctx.exit(EXIT_CRYPTO)
         return
 
-    payload_size = max(len(data) - header.header_len, 0)
+    ordered = sorted(descriptors, key=lambda d: d.volume_id)
+    selected = ordered[0]
+    payload_size = selected.payload_length if selected.payload_length else max(
+        len(data) - selected.payload_offset - TAG_LEN, 0
+    )
     table = Table(show_header=False, box=None)
     table.add_row("Magic/Version", f"ZILENC / {header.version}")
-    table.add_row("Volumes", str(len(descriptors)))
-    if header.key_mode == KEY_MODE_PQ_HYBRID:
+    table.add_row("Volume", f"id={selected.volume_id}")
+    if selected.key_mode == KEY_MODE_PQ_HYBRID:
         mode_label = "pq-hybrid (Kyber768 + AES-GCM)"
-    elif header.key_mode == KEY_MODE_PASSWORD_ONLY:
+    elif selected.key_mode == KEY_MODE_PASSWORD_ONLY:
         mode_label = "password-only"
     else:
-        mode_label = f"unknown ({header.key_mode})"
+        mode_label = f"unknown ({selected.key_mode})"
     table.add_row("Key mode", mode_label)
     table.add_row(
         "Argon2id",
-        f"mem={header.argon_mem_cost} KiB, time={header.argon_time_cost}, p={header.argon_parallelism}",
+        f"mem={selected.argon_mem_cost} KiB, time={selected.argon_time_cost}, p={selected.argon_parallelism}",
     )
     table.add_row("Payload size", f"~{_human_size(payload_size)}")
 
@@ -327,22 +337,25 @@ def info(ctx: click.Context, container: Path, show_volumes: bool) -> None:
     console.print(table)
 
     if show_volumes:
-        console.print("Volumes:")
-        ordered = sorted(descriptors, key=lambda d: d.volume_id)
+        console.print("Volumes (verbose):")
         for desc in ordered:
-            name = "main" if desc.volume_id == 0 else "decoy" if desc.volume_id == 1 else f"id={desc.volume_id}"
-            size = desc.payload_length if desc.payload_length else max(len(data) - desc.payload_offset - TAG_LEN, 0)
+            size = desc.payload_length if desc.payload_length else max(
+                len(data) - desc.payload_offset - TAG_LEN, 0
+            )
             if desc.key_mode == KEY_MODE_PQ_HYBRID:
                 mode_label = "pq-hybrid (Kyber768 + AES-GCM)"
             elif desc.key_mode == KEY_MODE_PASSWORD_ONLY:
                 mode_label = "password-only"
             else:
                 mode_label = f"unknown ({desc.key_mode})"
+            pq_info = ""
+            if desc.pq_ciphertext is not None and desc.pq_wrapped_secret is not None:
+                pq_info = f", pq-fields: ct={len(desc.pq_ciphertext)}B, sk={len(desc.pq_wrapped_secret)}B"
             console.print(
                 "  - "
-                + name
-                + f" (id={desc.volume_id}, key_mode={mode_label}, size≈{_human_size(size)}, "
-                + f"argon2: mem={desc.argon_mem_cost} KiB, time={desc.argon_time_cost}, p={desc.argon_parallelism})",
+                + f"volume {desc.volume_id}"
+                + f" (key_mode={mode_label}, size≈{_human_size(size)}, "
+                + f"argon2: mem={desc.argon_mem_cost} KiB, time={desc.argon_time_cost}, p={desc.argon_parallelism}{pq_info})",
             )
     ctx.exit(EXIT_SUCCESS)
 
