@@ -103,6 +103,20 @@ def _validate_argon_params(params: Argon2Params) -> Argon2Params:
     return params
 
 
+def _validate_decrypt_argon_params(params: Argon2Params) -> Argon2Params:
+    try:
+        return _validate_argon_params(params)
+    except UnsupportedFeatureError as exc:  # pragma: no cover - thin wrapper
+        raise ContainerFormatError("Container has invalid Argon2 parameters") from exc
+
+
+def _zeroize(buffer: bytearray | None) -> None:
+    if buffer is None:
+        return
+    for idx in range(len(buffer)):
+        buffer[idx] = 0
+
+
 def resolve_argon_params(
     *,
     mem_kib: int | None = None,
@@ -134,23 +148,32 @@ class PasswordKeyProvider:
         self.password = password
         self.salt = salt
         self.params = params
-        self._password_key: bytes | None = None
+        self._password_key: bytearray | None = None
 
     def _ensure_key(self) -> bytes:
         if self._password_key is None:
-            self._password_key = derive_key_from_password(
-                self.password,
-                self.salt,
-                mem_cost=self.params.mem_cost_kib,
-                time_cost=self.params.time_cost,
-                parallelism=self.params.parallelism,
+            self._password_key = bytearray(
+                derive_key_from_password(
+                    self.password,
+                    self.salt,
+                    mem_cost=self.params.mem_cost_kib,
+                    time_cost=self.params.time_cost,
+                    parallelism=self.params.parallelism,
+                )
             )
         return self._password_key
 
+    def _clear_key(self) -> None:
+        _zeroize(self._password_key)
+        self._password_key = None
+
     def wrap_file_key(self, file_key: bytes) -> WrappedKey:
         key = self._ensure_key()
-        ciphertext, tag = AesGcmEncryptor.encrypt(key, WRAP_NONCE, file_key, b"")
-        return WrappedKey(data=ciphertext, tag=tag)
+        try:
+            ciphertext, tag = AesGcmEncryptor.encrypt(key, WRAP_NONCE, file_key, b"")
+            return WrappedKey(data=ciphertext, tag=tag)
+        finally:
+            self._clear_key()
 
     def unwrap_file_key(self, wrapped: WrappedKey) -> bytes:
         key = self._ensure_key()
@@ -158,6 +181,8 @@ class PasswordKeyProvider:
             return AesGcmEncryptor.decrypt(key, WRAP_NONCE, wrapped.data, wrapped.tag, b"")
         except InvalidTag as exc:
             raise InvalidPassword("Unable to unwrap file key") from exc
+        finally:
+            self._clear_key()
 
 
 class _PayloadSource:
@@ -519,17 +544,22 @@ def _derive_file_key(
     if mode is not None and mode != expected_mode:
         raise UnsupportedFeatureError("requested check mode does not match volume key_mode")
 
-    decrypt_params = Argon2Params(
-        mem_cost_kib=descriptor.argon_mem_cost,
-        time_cost=descriptor.argon_time_cost,
-        parallelism=descriptor.argon_parallelism,
+    decrypt_params = _validate_decrypt_argon_params(
+        Argon2Params(
+            mem_cost_kib=descriptor.argon_mem_cost,
+            time_cost=descriptor.argon_time_cost,
+            parallelism=descriptor.argon_parallelism,
+        )
     )
 
     if descriptor.key_mode == KEY_MODE_PASSWORD_ONLY:
         provider = PasswordKeyProvider(password, descriptor.salt_argon2, decrypt_params)
-        return provider.unwrap_file_key(
-            WrappedKey(data=descriptor.wrapped_key, tag=descriptor.wrapped_key_tag),
-        )
+        try:
+            return provider.unwrap_file_key(
+                WrappedKey(data=descriptor.wrapped_key, tag=descriptor.wrapped_key_tag),
+            )
+        finally:
+            del provider
 
     if descriptor.key_mode == KEY_MODE_PQ_HYBRID:
         if not pq.available():
@@ -541,12 +571,14 @@ def _derive_file_key(
         ):
             raise ContainerFormatError("PQ header missing required fields")
 
-        password_key = derive_key_from_password(
-            password,
-            descriptor.salt_argon2,
-            mem_cost=decrypt_params.mem_cost_kib,
-            time_cost=decrypt_params.time_cost,
-            parallelism=decrypt_params.parallelism,
+        password_key = bytearray(
+            derive_key_from_password(
+                password,
+                descriptor.salt_argon2,
+                mem_cost=decrypt_params.mem_cost_kib,
+                time_cost=decrypt_params.time_cost,
+                parallelism=decrypt_params.parallelism,
+            )
         )
         try:
             kem_secret = AesGcmEncryptor.decrypt(
@@ -563,7 +595,7 @@ def _derive_file_key(
         hkdf = HKDF(
             algorithm=hashes.SHA256(),
             length=32,
-            salt=None,
+            salt=descriptor.salt_argon2,
             info=b"zilant-pq-hybrid",
         )
         master_key = hkdf.derive(shared_secret + password_key)
@@ -577,6 +609,9 @@ def _derive_file_key(
             )
         except InvalidTag as exc:
             raise InvalidPassword("Unable to unwrap file key") from exc
+        finally:
+            _zeroize(password_key)
+            _zeroize(bytearray(master_key))
 
     raise UnsupportedFeatureError("Unsupported key mode")
 
@@ -688,12 +723,14 @@ def encrypt_file(
     elif mode_name == "pq-hybrid":
         if not pq.available():
             raise PqSupportError("PQ-hybrid mode is not available (oqs not installed)")
-        password_key = derive_key_from_password(
-            password,
-            salt,
-            mem_cost=argon_params.mem_cost_kib,
-            time_cost=argon_params.time_cost,
-            parallelism=argon_params.parallelism,
+        password_key = bytearray(
+            derive_key_from_password(
+                password,
+                salt,
+                mem_cost=argon_params.mem_cost_kib,
+                time_cost=argon_params.time_cost,
+                parallelism=argon_params.parallelism,
+            )
         )
         public_key, secret_key = pq.generate_kem_keypair()
         kem_ciphertext, shared_secret = pq.encapsulate(public_key)
@@ -701,7 +738,7 @@ def encrypt_file(
         hkdf = HKDF(
             algorithm=hashes.SHA256(),
             length=32,
-            salt=None,
+            salt=salt,
             info=b"zilant-pq-hybrid",
         )
         master_key = hkdf.derive(shared_secret + password_key)
@@ -709,6 +746,8 @@ def encrypt_file(
         wrapped_key_data, wrapped_key_tag = AesGcmEncryptor.encrypt(master_key, WRAP_NONCE, file_key, b"")
         wrapped_secret, wrapped_secret_tag = AesGcmEncryptor.encrypt(password_key, WRAP_NONCE, secret_key, b"")
         reserved_bytes = bytes(RESERVED_LEN)
+
+        _zeroize(password_key)
 
         descriptor = VolumeDescriptor(
             volume_id=0,
@@ -885,19 +924,23 @@ def encrypt_with_decoy(
                 )
             )
         else:
-            password_key_main = derive_key_from_password(
-                main_password,
-                main_salt,
-                mem_cost=argon_params.mem_cost_kib,
-                time_cost=argon_params.time_cost,
-                parallelism=argon_params.parallelism,
+            password_key_main = bytearray(
+                derive_key_from_password(
+                    main_password,
+                    main_salt,
+                    mem_cost=argon_params.mem_cost_kib,
+                    time_cost=argon_params.time_cost,
+                    parallelism=argon_params.parallelism,
+                )
             )
-            password_key_decoy = derive_key_from_password(
-                decoy_password,
-                decoy_salt,
-                mem_cost=argon_params.mem_cost_kib,
-                time_cost=argon_params.time_cost,
-                parallelism=argon_params.parallelism,
+            password_key_decoy = bytearray(
+                derive_key_from_password(
+                    decoy_password,
+                    decoy_salt,
+                    mem_cost=argon_params.mem_cost_kib,
+                    time_cost=argon_params.time_cost,
+                    parallelism=argon_params.parallelism,
+                )
             )
 
             public_key, secret_key = pq.generate_kem_keypair()
@@ -906,11 +949,16 @@ def encrypt_with_decoy(
             hkdf = HKDF(
                 algorithm=hashes.SHA256(),
                 length=32,
-                salt=None,
+                salt=main_salt,
                 info=b"zilant-pq-hybrid",
             )
             master_key = hkdf.derive(shared_secret + password_key_main)
-            decoy_master_key = hkdf.derive(shared_secret + password_key_decoy)
+            decoy_master_key = HKDF(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=decoy_salt,
+                info=b"zilant-pq-hybrid",
+            ).derive(shared_secret + password_key_decoy)
 
             main_wrapped_key, main_wrapped_tag = AesGcmEncryptor.encrypt(
                 master_key, WRAP_NONCE, main_file_key, b"",
@@ -924,6 +972,9 @@ def encrypt_with_decoy(
             )
             main_reserved = bytes(RESERVED_LEN)
             decoy_reserved = bytes(RESERVED_LEN)
+
+            _zeroize(password_key_main)
+            _zeroize(password_key_decoy)
 
             descriptors.append(
                 VolumeDescriptor(
@@ -1074,10 +1125,12 @@ def decrypt_file(
         if main_descriptor is not None and any(d.key_mode != main_descriptor.key_mode for d in descriptors):
             raise UnsupportedFeatureError("all volumes in a container must share the same key_mode")
 
-        decrypt_params = Argon2Params(
-            mem_cost_kib=descriptor.argon_mem_cost,
-            time_cost=descriptor.argon_time_cost,
-            parallelism=descriptor.argon_parallelism,
+        decrypt_params = _validate_decrypt_argon_params(
+            Argon2Params(
+                mem_cost_kib=descriptor.argon_mem_cost,
+                time_cost=descriptor.argon_time_cost,
+                parallelism=descriptor.argon_parallelism,
+            )
         )
 
         expected_mode = "pq-hybrid" if descriptor.key_mode == KEY_MODE_PQ_HYBRID else "password"
@@ -1094,20 +1147,25 @@ def decrypt_file(
             if effective_mode != "password":
                 raise UnsupportedFeatureError("requested decrypt mode does not match volume key_mode")
             provider = PasswordKeyProvider(password, descriptor.salt_argon2, decrypt_params)
-            file_key = provider.unwrap_file_key(
-                WrappedKey(data=descriptor.wrapped_key, tag=descriptor.wrapped_key_tag),
-            )
+            try:
+                file_key = provider.unwrap_file_key(
+                    WrappedKey(data=descriptor.wrapped_key, tag=descriptor.wrapped_key_tag),
+                )
+            finally:
+                del provider
         elif descriptor.key_mode == KEY_MODE_PQ_HYBRID:
             if effective_mode != "pq-hybrid":
                 raise UnsupportedFeatureError("requested decrypt mode does not match volume key_mode")
             if not pq.available():
                 raise PqSupportError("PQ-hybrid containers require oqs support")
-            password_key = derive_key_from_password(
-                password,
-                descriptor.salt_argon2,
-                mem_cost=decrypt_params.mem_cost_kib,
-                time_cost=decrypt_params.time_cost,
-                parallelism=decrypt_params.parallelism,
+            password_key = bytearray(
+                derive_key_from_password(
+                    password,
+                    descriptor.salt_argon2,
+                    mem_cost=decrypt_params.mem_cost_kib,
+                    time_cost=decrypt_params.time_cost,
+                    parallelism=decrypt_params.parallelism,
+                )
             )
             if (
                 descriptor.pq_wrapped_secret is None
@@ -1130,7 +1188,7 @@ def decrypt_file(
             hkdf = HKDF(
                 algorithm=hashes.SHA256(),
                 length=32,
-                salt=None,
+                salt=descriptor.salt_argon2,
                 info=b"zilant-pq-hybrid",
             )
             master_key = hkdf.derive(shared_secret + password_key)
@@ -1144,6 +1202,9 @@ def decrypt_file(
                 )
             except InvalidTag as exc:
                 raise InvalidPassword("Unable to unwrap file key") from exc
+            finally:
+                _zeroize(password_key)
+                _zeroize(bytearray(master_key))
         else:
             raise UnsupportedFeatureError("Unsupported key mode")
 
@@ -1203,10 +1264,12 @@ def decrypt_auto_volume(
             if effective_mode is not None and effective_mode != expected_mode:
                 continue
 
-            decrypt_params = Argon2Params(
-                mem_cost_kib=descriptor.argon_mem_cost,
-                time_cost=descriptor.argon_time_cost,
-                parallelism=descriptor.argon_parallelism,
+            decrypt_params = _validate_decrypt_argon_params(
+                Argon2Params(
+                    mem_cost_kib=descriptor.argon_mem_cost,
+                    time_cost=descriptor.argon_time_cost,
+                    parallelism=descriptor.argon_parallelism,
+                )
             )
             ciphertext_len = _ciphertext_length_for_descriptor(descriptor, descriptors, file_size)
             if ciphertext_len < 0:
@@ -1217,9 +1280,12 @@ def decrypt_auto_volume(
                     if effective_mode is not None and effective_mode != "password":
                         continue
                     provider = PasswordKeyProvider(password, descriptor.salt_argon2, decrypt_params)
-                    file_key = provider.unwrap_file_key(
-                        WrappedKey(data=descriptor.wrapped_key, tag=descriptor.wrapped_key_tag),
-                    )
+                    try:
+                        file_key = provider.unwrap_file_key(
+                            WrappedKey(data=descriptor.wrapped_key, tag=descriptor.wrapped_key_tag),
+                        )
+                    finally:
+                        del provider
                 elif descriptor.key_mode == KEY_MODE_PQ_HYBRID:
                     if effective_mode is not None and effective_mode != "pq-hybrid":
                         continue
@@ -1231,12 +1297,14 @@ def decrypt_auto_volume(
                         or descriptor.pq_wrapped_secret_tag is None
                     ):
                         raise ContainerFormatError("PQ header missing required fields")
-                    password_key = derive_key_from_password(
-                        password,
-                        descriptor.salt_argon2,
-                        mem_cost=decrypt_params.mem_cost_kib,
-                        time_cost=decrypt_params.time_cost,
-                        parallelism=decrypt_params.parallelism,
+                    password_key = bytearray(
+                        derive_key_from_password(
+                            password,
+                            descriptor.salt_argon2,
+                            mem_cost=decrypt_params.mem_cost_kib,
+                            time_cost=decrypt_params.time_cost,
+                            parallelism=decrypt_params.parallelism,
+                        )
                     )
                     try:
                         kem_secret = AesGcmEncryptor.decrypt(
@@ -1253,7 +1321,7 @@ def decrypt_auto_volume(
                     hkdf = HKDF(
                         algorithm=hashes.SHA256(),
                         length=32,
-                        salt=None,
+                        salt=descriptor.salt_argon2,
                         info=b"zilant-pq-hybrid",
                     )
                     master_key = hkdf.derive(shared_secret + password_key)
@@ -1267,6 +1335,9 @@ def decrypt_auto_volume(
                         )
                     except InvalidTag as exc:
                         raise InvalidPassword("Unable to unwrap file key") from exc
+                    finally:
+                        _zeroize(password_key)
+                        _zeroize(bytearray(master_key))
                 else:
                     raise UnsupportedFeatureError("Unsupported key mode")
 
