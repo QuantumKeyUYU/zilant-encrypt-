@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import tempfile
+import zipfile
+import shutil
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import TracebackType
@@ -46,6 +47,7 @@ WRAP_NONCE = b"\x00" * 12
 PAYLOAD_MAGIC = b"ZPAY"
 PAYLOAD_VERSION = 1
 PAYLOAD_META_LEN_SIZE = 4
+MAX_PAYLOAD_META_LEN = 64 * 1024
 STREAM_CHUNK_SIZE = 1024 * 64
 ARGON_MEM_MIN_KIB = 32 * 1024
 ARGON_MEM_MAX_KIB = 2 * 1024 * 1024
@@ -293,6 +295,8 @@ class _PayloadWriter:
         length_start = len(PAYLOAD_MAGIC) + 1
         length_end = length_start + PAYLOAD_META_LEN_SIZE
         meta_len = int.from_bytes(self._buffer[length_start:length_end], "little")
+        if meta_len > MAX_PAYLOAD_META_LEN:
+            raise ContainerFormatError("Payload metadata too large")
         total_header = minimum_header + meta_len
         if len(self._buffer) < total_header:
             return
@@ -363,7 +367,16 @@ class _PayloadWriter:
             temp_zip.close()
             self.out_path.mkdir(parents=True, exist_ok=True)
             try:
-                shutil.unpack_archive(temp_zip.name, self.out_path)
+                base_path = self.out_path.resolve()
+                with zipfile.ZipFile(temp_zip.name) as archive:
+                    for member in archive.infolist():
+                        member_path = Path(member.filename)
+                        if member_path.is_absolute():
+                            raise ContainerFormatError("Archive entry has invalid path")
+                        resolved_member = (base_path / member_path).resolve()
+                        if resolved_member != base_path and not str(resolved_member).startswith(str(base_path) + os.sep):
+                            raise ContainerFormatError("Archive entry escapes target directory")
+                    archive.extractall(self.out_path)
             finally:
                 Path(temp_zip.name).unlink(missing_ok=True)
 
