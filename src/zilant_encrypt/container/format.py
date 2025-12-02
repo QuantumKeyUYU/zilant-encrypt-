@@ -17,6 +17,7 @@ HEADER_V1_LEN = 128
 HEADER_LEN = HEADER_V1_LEN  # backwards compatibility
 KEY_MODE_PASSWORD_ONLY = 0x01
 KEY_MODE_PQ_HYBRID = 0x02
+MAX_VOLUMES = 2
 
 MAGIC_LEN = 6
 VERSION_LEN = 1
@@ -25,6 +26,7 @@ NONCE_LEN = 12
 WRAPPED_KEY_MAX_LEN = 32
 WRAPPED_KEY_TAG_LEN = 16
 RESERVED_LEN = 28
+PAYLOAD_TAG_LEN = 16
 
 _HEADER_STRUCT_V1 = Struct(
     "<6sBBH16sIII12sH32s16s28s",
@@ -300,6 +302,20 @@ def _build_volume_meta(desc: VolumeDescriptor) -> bytes:
     )
 
 
+def _validate_volume_layout(descriptors: list[VolumeDescriptor]) -> None:
+    if len(descriptors) > MAX_VOLUMES:
+        raise ContainerFormatError(f"Container has too many volumes (max {MAX_VOLUMES})")
+
+    if any(desc.payload_offset == 0 or desc.payload_length == 0 for desc in descriptors):
+        return
+
+    ordered = sorted(descriptors, key=lambda d: d.payload_offset)
+    for first, second in zip(ordered, ordered[1:]):
+        first_end = first.payload_offset + first.payload_length + PAYLOAD_TAG_LEN
+        if second.payload_offset < first_end:
+            raise ContainerFormatError("Volume payload regions overlap")
+
+
 def build_header_v3(
     volume_descriptors: Iterable[VolumeDescriptor],
     common_meta: dict,  # noqa: ARG001
@@ -307,6 +323,7 @@ def build_header_v3(
     descriptors = list(volume_descriptors)
     if not descriptors:
         raise ContainerFormatError("At least one volume descriptor is required")
+    _validate_volume_layout(descriptors)
 
     meta_blobs = [
         _build_volume_meta(desc)
@@ -762,6 +779,8 @@ def parse_header_v3(data: bytes) -> tuple[ContainerHeader, list[VolumeDescriptor
 
     if not descriptors:
         raise ContainerFormatError("No descriptors found")
+
+    _validate_volume_layout(descriptors)
 
     main = descriptors[0]
     header = ContainerHeader(

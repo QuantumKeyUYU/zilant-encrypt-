@@ -6,10 +6,13 @@ from zilant_encrypt.container import api
 from zilant_encrypt.container.format import (
     KEY_MODE_PASSWORD_ONLY,
     KEY_MODE_PQ_HYBRID,
+    VolumeDescriptor,
+    build_header,
     read_header_from_stream,
 )
-from zilant_encrypt.errors import ContainerFormatError, InvalidPassword, UnsupportedFeatureError
 from zilant_encrypt.crypto import pq
+from zilant_encrypt.crypto.kdf import recommended_params
+from zilant_encrypt.errors import ContainerFormatError, IntegrityError, InvalidPassword, UnsupportedFeatureError
 
 
 def test_main_and_decoy_roundtrip_password_only(tmp_path: Path) -> None:
@@ -21,8 +24,15 @@ def test_main_and_decoy_roundtrip_password_only(tmp_path: Path) -> None:
 
     container = tmp_path / "vault.zil"
 
-    api.encrypt_file(main_data, container, "pass-main", volume="main")
-    api.encrypt_file(decoy_data, container, "pass-decoy", volume="decoy")
+    api.encrypt_with_decoy(
+        main_data,
+        container,
+        main_password="pass-main",
+        decoy_password="pass-decoy",
+        input_path_decoy=decoy_data,
+        mode="password",
+        overwrite=True,
+    )
 
     main_out = tmp_path / "main_out.txt"
     decoy_out = tmp_path / "decoy_out.txt"
@@ -40,7 +50,7 @@ def test_main_and_decoy_roundtrip_password_only(tmp_path: Path) -> None:
         api.decrypt_file(container, tmp_path / "wrong_decoy.txt", "pass-main", volume="decoy")
 
 
-def test_decoy_requires_existing_v3_container(tmp_path: Path) -> None:
+def test_decoy_requires_rebuild(tmp_path: Path) -> None:
     payload = tmp_path / "data.txt"
     payload.write_text("data")
     out_path = tmp_path / "new.zil"
@@ -50,10 +60,8 @@ def test_decoy_requires_existing_v3_container(tmp_path: Path) -> None:
 
     api.encrypt_file(payload, out_path, "pw", volume="main")
 
-    api.encrypt_file(payload, out_path, "pw2", volume="decoy")
-
     with pytest.raises(UnsupportedFeatureError):
-        api.decrypt_file(out_path, tmp_path / "missing.txt", "pw2", volume="decoy", mode="pq-hybrid")
+        api.encrypt_file(payload, out_path, "pw2", volume="decoy")
 
 
 def test_decoy_must_match_main_key_mode(tmp_path: Path) -> None:
@@ -85,8 +93,15 @@ def test_encrypt_decrypt_pq_main_and_decoy(tmp_path: Path) -> None:
 
     container = tmp_path / "pq_multi.zil"
 
-    api.encrypt_file(main_data, container, "pw-main", volume="main", mode="pq-hybrid")
-    api.encrypt_file(decoy_data, container, "pw-decoy", volume="decoy", mode="pq-hybrid")
+    api.encrypt_with_decoy(
+        main_data,
+        container,
+        main_password="pw-main",
+        decoy_password="pw-decoy",
+        input_path_decoy=decoy_data,
+        mode="pq-hybrid",
+        overwrite=True,
+    )
 
     main_out = tmp_path / "main_out.txt"
     decoy_out = tmp_path / "decoy_out.txt"
@@ -113,6 +128,7 @@ def test_encrypt_with_decoy_helper_roundtrip(tmp_path: Path) -> None:
         decoy_password="decoy-pass",
         input_path_decoy=decoy_data,
         mode="password",
+        overwrite=True,
     )
 
     main_out = tmp_path / "main_out.txt"
@@ -149,6 +165,7 @@ def test_encrypt_with_decoy_helper_roundtrip_pq(tmp_path: Path) -> None:
         decoy_password="decoy-pass",
         input_path_decoy=decoy_data,
         mode="pq_hybrid",
+        overwrite=True,
     )
 
     main_out = tmp_path / "main_out.txt"
@@ -165,3 +182,116 @@ def test_encrypt_with_decoy_helper_roundtrip_pq(tmp_path: Path) -> None:
     assert len(descriptors) >= 2
     assert all(d.key_mode == descriptors[0].key_mode for d in descriptors)
     assert descriptors[0].key_mode == KEY_MODE_PQ_HYBRID
+
+
+def test_corrupted_header_bytes_fail_integrity(tmp_path: Path) -> None:
+    payload = tmp_path / "data.txt"
+    payload.write_text("secret")
+    container = tmp_path / "vault.zil"
+    api.encrypt_file(payload, container, "pw", volume="main")
+
+    with container.open("rb") as f:
+        _header, descriptors, header_bytes = read_header_from_stream(f)
+
+    corrupted = tmp_path / "vault_corrupt.zil"
+    data = bytearray(container.read_bytes())
+    nonce = descriptors[0].nonce_aes_gcm
+    nonce_offset = header_bytes.find(nonce)
+    assert nonce_offset != -1
+    data[nonce_offset] ^= 0x01
+    corrupted.write_bytes(data)
+
+    with pytest.raises(IntegrityError):
+        api.decrypt_file(corrupted, tmp_path / "out.txt", "pw")
+
+
+def test_container_rejects_excess_volumes(tmp_path: Path) -> None:
+    params = recommended_params()
+    salt = b"s" * 16
+    nonce = b"n" * 12
+    descriptor = VolumeDescriptor(
+        volume_id=0,
+        key_mode=KEY_MODE_PASSWORD_ONLY,
+        flags=0,
+        payload_offset=128,
+        payload_length=32,
+        salt_argon2=salt,
+        argon_mem_cost=params.mem_cost_kib,
+        argon_time_cost=params.time_cost,
+        argon_parallelism=params.parallelism,
+        nonce_aes_gcm=nonce,
+        wrapped_key=b"k" * 16,
+        wrapped_key_tag=b"t" * 16,
+        reserved=bytes(28),
+    )
+
+    with pytest.raises(ContainerFormatError):
+        build_header(
+            key_mode=descriptor.key_mode,
+            header_flags=descriptor.flags,
+            salt_argon2=descriptor.salt_argon2,
+            argon_mem_cost=descriptor.argon_mem_cost,
+            argon_time_cost=descriptor.argon_time_cost,
+            argon_parallelism=descriptor.argon_parallelism,
+            nonce_aes_gcm=descriptor.nonce_aes_gcm,
+            wrapped_key=descriptor.wrapped_key,
+            wrapped_key_tag=descriptor.wrapped_key_tag,
+            reserved=descriptor.reserved,
+            version=3,
+            volume_descriptors=[descriptor, descriptor, descriptor],
+            common_meta={},
+        )
+
+
+def test_container_rejects_overlapping_volumes(tmp_path: Path) -> None:
+    params = recommended_params()
+    salt = b"s" * 16
+    nonce = b"n" * 12
+    base_descriptor = VolumeDescriptor(
+        volume_id=0,
+        key_mode=KEY_MODE_PASSWORD_ONLY,
+        flags=0,
+        payload_offset=256,
+        payload_length=64,
+        salt_argon2=salt,
+        argon_mem_cost=params.mem_cost_kib,
+        argon_time_cost=params.time_cost,
+        argon_parallelism=params.parallelism,
+        nonce_aes_gcm=nonce,
+        wrapped_key=b"k" * 16,
+        wrapped_key_tag=b"t" * 16,
+        reserved=bytes(28),
+    )
+
+    overlap_descriptor = VolumeDescriptor(
+        volume_id=1,
+        key_mode=KEY_MODE_PASSWORD_ONLY,
+        flags=0,
+        payload_offset=base_descriptor.payload_offset + 10,
+        payload_length=64,
+        salt_argon2=salt,
+        argon_mem_cost=params.mem_cost_kib,
+        argon_time_cost=params.time_cost,
+        argon_parallelism=params.parallelism,
+        nonce_aes_gcm=nonce,
+        wrapped_key=b"k" * 16,
+        wrapped_key_tag=b"t" * 16,
+        reserved=bytes(28),
+    )
+
+    with pytest.raises(ContainerFormatError):
+        build_header(
+            key_mode=base_descriptor.key_mode,
+            header_flags=base_descriptor.flags,
+            salt_argon2=base_descriptor.salt_argon2,
+            argon_mem_cost=base_descriptor.argon_mem_cost,
+            argon_time_cost=base_descriptor.argon_time_cost,
+            argon_parallelism=base_descriptor.argon_parallelism,
+            nonce_aes_gcm=base_descriptor.nonce_aes_gcm,
+            wrapped_key=base_descriptor.wrapped_key,
+            wrapped_key_tag=base_descriptor.wrapped_key_tag,
+            reserved=base_descriptor.reserved,
+            version=3,
+            volume_descriptors=[base_descriptor, overlap_descriptor],
+            common_meta={},
+        )
