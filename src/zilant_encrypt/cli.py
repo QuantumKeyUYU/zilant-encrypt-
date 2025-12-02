@@ -161,6 +161,27 @@ def cli() -> None:
     default=False,
     help="Overwrite output if it already exists.",
 )
+@click.option(
+    "-M",
+    "--argon-mem-kib",
+    type=int,
+    default=None,
+    help="Override Argon2 memory cost in KiB (advanced).",
+)
+@click.option(
+    "-T",
+    "--argon-time",
+    type=int,
+    default=None,
+    help="Override Argon2 time cost (iterations, advanced).",
+)
+@click.option(
+    "-P",
+    "--argon-parallelism",
+    type=int,
+    default=None,
+    help="Override Argon2 parallelism (advanced).",
+)
 @click.pass_context
 def encrypt(
     ctx: click.Context,
@@ -172,9 +193,23 @@ def encrypt(
     overwrite: bool,
     mode: str,
     volume: str,
+    argon_mem_kib: int | None,
+    argon_time: int | None,
+    argon_parallelism: int | None,
 ) -> None:
     password = _prompt_password(password_opt)
     target = output_path or input_path.with_suffix(f"{input_path.suffix}.zil")
+
+    try:
+        argon_params = api.resolve_argon_params(
+            mem_kib=argon_mem_kib,
+            time_cost=argon_time,
+            parallelism=argon_parallelism,
+        )
+    except UnsupportedFeatureError as exc:
+        console.print(f"[red]{exc}[/red]")
+        ctx.exit(EXIT_USAGE)
+        return
 
     if mode == "pq-hybrid" and not pq.available():
         console.print("[red]Error: container requires PQ support that is not available[/red]")
@@ -197,6 +232,7 @@ def encrypt(
                 input_path_decoy=decoy_payload,
                 mode=mode,
                 overwrite=overwrite,
+                argon_params=argon_params,
             ),
         )
     else:
@@ -219,7 +255,13 @@ def encrypt(
 
         code = _handle_action(
             lambda: api.encrypt_file(
-                input_path, target, password, overwrite=overwrite, mode=mode, volume=volume
+                input_path,
+                target,
+                password,
+                overwrite=overwrite,
+                mode=mode,
+                volume=volume,
+                argon_params=argon_params,
             ),
         )
     if code == EXIT_SUCCESS:
@@ -303,6 +345,7 @@ def decrypt(
     epilog="Example:\n  zilenc info secret.zil",
 )
 @click.argument("container", type=click.Path(path_type=Path))
+@click.option("--password", "password_opt", help="Password to authenticate a volume (optional).")
 @click.option(
     "--volumes/--no-volumes",
     "show_volumes",
@@ -310,31 +353,66 @@ def decrypt(
     help="Show verbose per-volume details.",
 )
 @click.pass_context
-def info(ctx: click.Context, container: Path, show_volumes: bool) -> None:
+def info(ctx: click.Context, container: Path, password_opt: str | None, show_volumes: bool) -> None:
+    password = _prompt_password(password_opt) if password_opt is not None else None
+
     try:
-        overview, _validated = api.check_container(container, password=None)
-    except (ContainerFormatError, UnsupportedFeatureError) as exc:
-        console.print(f"[red]Unsupported or invalid container:[/red] {exc}")
-        ctx.exit(EXIT_CRYPTO)
+        overview, _ = api.check_container(container, password=None)
+    except (ContainerFormatError, UnsupportedFeatureError):
+        console.print("[red]Error: container is corrupted or not supported[/red]")
+        ctx.exit(EXIT_CORRUPT)
         return
     except FileNotFoundError as exc:
         console.print(f"[red]File not found:[/red] {exc}")
         ctx.exit(EXIT_FS)
         return
 
+    validated: set[int] = set()
+    if password is not None:
+        for candidate in overview.descriptors:
+            label = "main" if candidate.volume_id == 0 else "decoy" if candidate.volume_id == 1 else "all"
+            try:
+                _checked, ids = api.check_container(
+                    container, password=password, volume=label if label in {"main", "decoy"} else "all"
+                )
+                validated.update(ids)
+            except InvalidPassword:
+                continue
+            except PqSupportError:
+                console.print("[red]Error: container requires PQ support that is not available[/red]")
+                ctx.exit(EXIT_PQ_UNSUPPORTED)
+                return
+            except ContainerFormatError:
+                console.print("[red]Error: container is corrupted or not supported[/red]")
+                ctx.exit(EXIT_CORRUPT)
+                return
+        if not validated:
+            console.print("[red]Invalid password or key[/red]")
+            ctx.exit(EXIT_CRYPTO)
+            return
+
     ordered_layouts = sorted(overview.layouts, key=lambda l: l.descriptor.volume_id)
     primary_layout = ordered_layouts[0]
     selected = primary_layout.descriptor
+
+    if validated:
+        matched_labels = ", ".join(_volume_label(v) for v in sorted(validated))
+        volume_summary = f"{len(overview.descriptors)} (password matched: {matched_labels})"
+    elif len(overview.descriptors) == 1:
+        volume_summary = "1 (outer only)"
+    else:
+        volume_summary = "1 (outer; additional volumes may be present)"
+
     table = Table(show_header=False, box=None)
     table.add_row("Magic/Version", f"ZILENC / {overview.header.version}")
-    table.add_row("Volumes", str(len(overview.descriptors)))
-    table.add_row("Volume", _volume_label(selected.volume_id))
+    table.add_row("Container size", _human_size(overview.file_size))
+    table.add_row("Volumes", volume_summary)
     table.add_row("Key mode", _mode_label(selected.key_mode, overview.pq_available))
     table.add_row(
         "Argon2id",
         f"mem={selected.argon_mem_cost} KiB, time={selected.argon_time_cost}, p={selected.argon_parallelism}",
     )
-    table.add_row("Payload size", f"~{_human_size(primary_layout.ciphertext_len)}")
+    table.add_row("Primary payload", f"~{_human_size(primary_layout.ciphertext_len)}")
     table.add_row("PQ support", "available" if overview.pq_available else "unavailable")
 
     console.print("[bold]Zilant container[/bold]")
@@ -342,17 +420,29 @@ def info(ctx: click.Context, container: Path, show_volumes: bool) -> None:
 
     if show_volumes:
         console.print("Volumes (verbose):")
-        for layout in ordered_layouts:
-            desc = layout.descriptor
-            pq_info = ""
-            if desc.pq_ciphertext is not None and desc.pq_wrapped_secret is not None:
-                pq_info = f", pq-fields: ct={len(desc.pq_ciphertext)}B, sk={len(desc.pq_wrapped_secret)}B"
+        if validated:
+            for layout in ordered_layouts:
+                desc = layout.descriptor
+                pq_info = ""
+                if desc.pq_ciphertext is not None and desc.pq_wrapped_secret is not None:
+                    pq_info = f", pq-fields: ct={len(desc.pq_ciphertext)}B, sk={len(desc.pq_wrapped_secret)}B"
+                status = "authenticated" if desc.volume_id in validated else "locked"
+                console.print(
+                    "  - "
+                    + f"volume {_volume_label(desc.volume_id)} ({status})"
+                    + f" (key_mode={_mode_label(desc.key_mode, overview.pq_available)}, size≈{_human_size(layout.ciphertext_len)}, "
+                    + f"argon2: mem={desc.argon_mem_cost} KiB, time={desc.argon_time_cost}, p={desc.argon_parallelism}{pq_info})",
+                )
+        else:
+            primary_label = _volume_label(primary_layout.descriptor.volume_id)
             console.print(
                 "  - "
-                + f"volume {_volume_label(desc.volume_id)}"
-                + f" (key_mode={_mode_label(desc.key_mode, overview.pq_available)}, size≈{_human_size(layout.ciphertext_len)}, "
-                + f"argon2: mem={desc.argon_mem_cost} KiB, time={desc.argon_time_cost}, p={desc.argon_parallelism}{pq_info})",
+                + f"volume {primary_label} (locked)"
+                + f" (key_mode={_mode_label(primary_layout.descriptor.key_mode, overview.pq_available)}, size≈{_human_size(primary_layout.ciphertext_len)}, "
+                + f"argon2: mem={primary_layout.descriptor.argon_mem_cost} KiB, time={primary_layout.descriptor.argon_time_cost}, p={primary_layout.descriptor.argon_parallelism})",
             )
+            if len(overview.descriptors) > 1:
+                console.print("  - additional volumes may be present (not listed without a password)")
     ctx.exit(EXIT_SUCCESS)
 
 
