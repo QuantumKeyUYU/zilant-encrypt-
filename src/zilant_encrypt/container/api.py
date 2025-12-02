@@ -55,6 +55,7 @@ ARGON_PARALLELISM_MIN = 1
 ARGON_PARALLELISM_MAX = 8
 
 
+
 @dataclass(frozen=True)
 class VolumeLayout:
     descriptor: VolumeDescriptor
@@ -499,7 +500,7 @@ def _select_descriptors(descriptors: list[VolumeDescriptor], volume: str) -> lis
 
 
 def _derive_file_key(
-    descriptor: VolumeDescriptor, password: str, mode: Literal["password", "pq-hybrid"] | None
+    descriptor: VolumeDescriptor, password: str, mode: ModeLiteral | None
 ) -> bytes:
     expected_mode = "pq-hybrid" if descriptor.key_mode == KEY_MODE_PQ_HYBRID else "password"
     if mode is not None and mode != expected_mode:
@@ -571,7 +572,7 @@ def check_container(
     container_path: os.PathLike[str] | str,
     *,
     password: str | None = None,
-    mode: Literal["password", "pq-hybrid"] | None = None,
+    mode: ModeLiteral | None = None,
     volume: Literal["main", "decoy", "all"] = "all",
 ) -> tuple[ContainerOverview, list[int]]:
     """Validate container structure and optionally verify tags for selected volumes.
@@ -579,6 +580,7 @@ def check_container(
     Returns a tuple of (overview, validated_volume_ids).
     """
     overview = _load_overview(Path(container_path))
+    requested_mode = None if mode is None else normalize_mode(mode)
 
     if password is None:
         return overview, []
@@ -588,7 +590,7 @@ def check_container(
 
     with Path(container_path).open("rb") as f:
         for desc in selected:
-            file_key = _derive_file_key(desc, password, mode)
+            file_key = _derive_file_key(desc, password, requested_mode)
             # Use 'layout' instead of 'l'
             layout = next((layout for layout in overview.layouts if layout.descriptor.volume_id == desc.volume_id), None)
             if layout is None:
@@ -613,7 +615,7 @@ def encrypt_file(
     password: str,
     *,
     overwrite: bool = False,
-    mode: Literal["password", "pq-hybrid"] | None = None,
+    mode: ModeLiteral | None = None,
     volume: Literal["main", "decoy"] = "main",
     argon_params: Argon2Params | None = None,
 ) -> None:
@@ -627,12 +629,9 @@ def encrypt_file(
 
     argon_params = resolve_argon_params(base=argon_params)
 
-    requested_mode = mode
+    requested_mode = None if mode is None else normalize_mode(mode)
     if requested_mode is None and not (volume == "decoy" and not is_new):
         requested_mode = "password"
-
-    if requested_mode is not None and requested_mode not in {"password", "pq-hybrid"}:
-        raise UnsupportedFeatureError(f"Unknown encryption mode: {requested_mode}")
 
     if requested_mode == "pq-hybrid" and not pq.available():
         raise PqSupportError("PQ-hybrid mode is not available (oqs not installed)")
@@ -646,9 +645,9 @@ def encrypt_file(
     nonce = os.urandom(12)
     file_key = os.urandom(32)
 
-    mode = requested_mode
+    mode_name = requested_mode or "password"
 
-    if mode == "password":
+    if mode_name == "password":
         provider = _PasswordOnlyProviderFactory(password, argon_params, salt).build()
         wrapped_key = provider.wrap_file_key(file_key)
         placeholder_ciphertext = os.urandom(PQ_PLACEHOLDER_CIPHERTEXT_LEN)
@@ -673,7 +672,7 @@ def encrypt_file(
             pq_wrapped_secret=placeholder_secret,
             pq_wrapped_secret_tag=placeholder_secret_tag,
         )
-    elif mode == "pq-hybrid":
+    elif mode_name == "pq-hybrid":
         if not pq.available():
             raise PqSupportError("PQ-hybrid mode is not available (oqs not installed)")
         password_key = derive_key_from_password(
@@ -717,7 +716,7 @@ def encrypt_file(
             pq_wrapped_secret_tag=wrapped_secret_tag,
         )
     else:
-        raise UnsupportedFeatureError(f"Unknown encryption mode: {mode}")
+        raise UnsupportedFeatureError(f"Unknown encryption mode: {mode_name}")
 
     with _PayloadSource(in_path) as payload_source:
         payload_header = _build_payload_header(payload_source.meta)
@@ -783,7 +782,7 @@ def encrypt_with_decoy(
     main_password: str,
     decoy_password: str,
     input_path_decoy: os.PathLike[str] | str | None = None,
-    mode: Literal["password", "pq_hybrid", "pq-hybrid"] = "password",
+    mode: ModeLiteral = "password",
     overwrite: bool = False,
     argon_params: Argon2Params | None = None,
 ) -> None:
@@ -795,7 +794,7 @@ def encrypt_with_decoy(
     if out_path.exists() and not overwrite:
         raise FileExistsError(f"Refusing to overwrite existing file: {out_path}")
 
-    effective_mode = "pq-hybrid" if mode == "pq_hybrid" else mode
+    effective_mode = normalize_mode(mode)
     if effective_mode == "pq-hybrid" and not pq.available():
         raise PqSupportError("PQ-hybrid mode is not available (oqs not installed)")
 
@@ -1036,7 +1035,7 @@ def decrypt_file(
     password: str,
     *,
     overwrite: bool = False,
-    mode: Literal["password", "pq-hybrid"] | None = None,
+    mode: ModeLiteral | None = None,
     volume: Literal["main", "decoy"] = "main",
 ) -> None:
     """Decrypt a container to an output file."""
@@ -1069,10 +1068,11 @@ def decrypt_file(
         )
 
         expected_mode = "pq-hybrid" if descriptor.key_mode == KEY_MODE_PQ_HYBRID else "password"
-        if mode is not None and mode != expected_mode:
+        requested_mode = None if mode is None else normalize_mode(mode)
+        if requested_mode is not None and requested_mode != expected_mode:
             raise UnsupportedFeatureError("requested decrypt mode does not match volume key_mode")
 
-        effective_mode = mode or expected_mode
+        effective_mode = requested_mode or expected_mode
         ciphertext_len = _ciphertext_length_for_descriptor(descriptor, descriptors, file_size)
         if ciphertext_len < 0:
             raise ContainerFormatError("Invalid payload length")
@@ -1151,7 +1151,7 @@ def decrypt_auto_volume(
     out_path: os.PathLike[str] | str,
     *,
     password: str,
-    mode: Optional[Literal["password", "pq_hybrid", "pq-hybrid"]] = None,
+    mode: ModeLiteral | None = None,
     overwrite: bool = False,
 ) -> tuple[int, str]:
     """Attempt to decrypt any volume that matches the provided password.
@@ -1170,7 +1170,7 @@ def decrypt_auto_volume(
     if file_size < HEADER_V1_LEN + TAG_LEN:
         raise ContainerFormatError("Container too small")
 
-    effective_mode = "pq-hybrid" if mode == "pq_hybrid" else mode
+    effective_mode = None if mode is None else normalize_mode(mode)
 
     with container.open("rb") as f:
         header, descriptors, header_bytes = read_header_from_stream(f)
@@ -1288,3 +1288,21 @@ def decrypt_auto_volume(
             raise InvalidPassword("Unable to decrypt any volume with the provided password")
 
         return successful
+ModeLiteral = Literal["password", "pq-hybrid"]
+
+
+def normalize_mode(mode: str | None) -> ModeLiteral:
+    """Normalize user-provided mode strings.
+
+    Accepts ``None`` and treats it as ``"password"`` for convenience. Legacy
+    values using an underscore are mapped to the hyphenated form.
+    """
+
+    if mode is None or mode.lower() == "password":
+        return "password"
+
+    normalized = mode.lower().replace("_", "-")
+    if normalized == "pq-hybrid":
+        return "pq-hybrid"
+
+    raise UnsupportedFeatureError(f"Unknown encryption mode: {mode}")

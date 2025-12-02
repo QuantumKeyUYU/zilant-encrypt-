@@ -13,6 +13,7 @@ from rich.table import Table
 
 from zilant_encrypt import __version__
 from zilant_encrypt.container import api
+from zilant_encrypt.container.api import ModeLiteral, normalize_mode
 from zilant_encrypt.container.format import (
     KEY_MODE_PASSWORD_ONLY,
     KEY_MODE_PQ_HYBRID,
@@ -33,6 +34,8 @@ EXIT_CRYPTO = 2
 EXIT_FS = 3
 EXIT_CORRUPT = 4
 EXIT_PQ_UNSUPPORTED = 5
+
+PQ_ERROR_MESSAGE = "Error: container requires PQ support (oqs) which is not available on this system."
 
 console = Console()
 
@@ -57,6 +60,38 @@ def _human_size(num_bytes: int) -> str:
             return f"{num:.1f} {unit}" if unit != "B" else f"{int(num)} {unit}"
         num /= 1024.0
     return f"{num:.1f} TB"
+
+
+def _pq_error() -> int:
+    console.print(f"[red]{PQ_ERROR_MESSAGE}[/red]")
+    return EXIT_PQ_UNSUPPORTED
+
+
+def _normalized_mode(mode_opt: str | None, *, default_to_password: bool = False) -> ModeLiteral | None:
+    if mode_opt is None:
+        return "password" if default_to_password else None
+    return normalize_mode(mode_opt)
+
+
+def _volume_selector(volume_id: int) -> Literal["main", "decoy", "all"]:
+    if volume_id == 0:
+        return "main"
+    if volume_id == 1:
+        return "decoy"
+    return "all"
+
+
+def _password_match_summary(validated: set[int]) -> str:
+    if not validated:
+        return "no volumes"
+    labels = sorted(validated)
+    if labels == [0]:
+        return "main volume"
+    if labels == [1]:
+        return "decoy volume"
+    if labels == [0, 1]:
+        return "main and decoy volumes"
+    return ", ".join(_volume_label(v) for v in labels)
 
 
 def _volume_label(volume_id: int) -> str:
@@ -93,8 +128,7 @@ def _handle_action(
         console.print(message)
         return EXIT_CORRUPT
     except PqSupportError:
-        console.print("[red]Error: container requires PQ support that is not available[/red]")
-        return EXIT_PQ_UNSUPPORTED
+        return _pq_error()
     except UnsupportedFeatureError as exc:
         console.print(f"[red]Unsupported or invalid container:[/red] {exc}")
         return EXIT_USAGE
@@ -122,12 +156,28 @@ def _handle_action(
 )
 @click.version_option(version=_package_version(), prog_name="Zilant Encrypt")
 def cli() -> None:
-    """Encrypt files and folders into v3 .zil containers with password or PQ-hybrid protection."""
+    """Manage v3 .zil containers (encrypt, decrypt, inspect, check).
+
+    Examples:
+      zilenc encrypt secret.txt secret.zil --password pw
+      zilenc encrypt secret.txt secret.zil --decoy-password decoy
+      zilenc info secret.zil --password pw
+
+    PQ-hybrid commands require oqs; without it you will see:
+      Error: container requires PQ support (oqs) which is not available on this system.
+    """
 
 
 @cli.command(
-    help="Encrypt a file or directory into a .zil container.",
-    epilog="Examples:\n  zilenc encrypt secret.txt secret.zil\n  zilenc encrypt ./folder ./folder.zil\n  zilenc encrypt ./folder  # output defaults to ./folder.zil",
+    help=(
+        "Encrypt a file or directory into a .zil container. Supports optional "
+        "decoy volumes and PQ-hybrid mode when oqs is installed."
+    ),
+    epilog=(
+        "Examples:\n  zilenc encrypt secret.txt secret.zil --password pw"
+        "\n  zilenc encrypt ./folder ./folder.zil --decoy-password decoy"
+        "\n  zilenc encrypt ./folder --mode pq-hybrid"
+    ),
 )
 @click.argument("input_path", type=click.Path(path_type=Path))
 @click.argument("output_path", required=False, type=click.Path(path_type=Path))
@@ -145,17 +195,22 @@ def cli() -> None:
 )
 @click.option(
     "--mode",
-    type=click.Choice(["password", "pq-hybrid"], case_sensitive=False),
+    type=click.Choice(["password", "pq-hybrid", "pq_hybrid"], case_sensitive=False),
     default="password",
     show_default=True,
-    help="Key protection mode (password or pq-hybrid when liboqs/oqs is available).",
+    help=(
+        "Key protection mode. Use 'password' for standard encryption or 'pq-hybrid'"
+        " ('pq_hybrid') to add Kyber768 when oqs is available."
+    ),
 )
 @click.option(
     "--volume",
     type=click.Choice(["main", "decoy"], case_sensitive=False),
     default="main",
     show_default=True,
-    help="Target volume (main or decoy). For decoy, the container must already exist (v3).",
+    help=(
+        "Target volume. Use 'decoy' only to add a decoy volume to an existing v3 container."
+    ),
 )
 @click.option(
     "--overwrite/--no-overwrite",
@@ -167,7 +222,9 @@ def cli() -> None:
     "--argon-mem-kib",
     type=int,
     default=None,
-    help="Override Argon2 memory cost in KiB (advanced).",
+    help=(
+        "Override Argon2 memory cost in KiB (advanced). Higher values slow down key derivation."
+    ),
 )
 @click.option(
     "-T",
@@ -200,6 +257,7 @@ def encrypt(
 ) -> None:
     password = _prompt_password(password_opt)
     target = output_path or input_path.with_suffix(f"{input_path.suffix}.zil")
+    normalized_mode = cast(ModeLiteral, _normalized_mode(mode, default_to_password=True))
 
     try:
         argon_params = api.resolve_argon_params(
@@ -212,9 +270,8 @@ def encrypt(
         ctx.exit(EXIT_USAGE)
         return
 
-    if mode == "pq-hybrid" and not pq.available():
-        console.print("[red]Error: container requires PQ support that is not available[/red]")
-        ctx.exit(EXIT_PQ_UNSUPPORTED)
+    if normalized_mode == "pq-hybrid" and not pq.available():
+        ctx.exit(_pq_error())
         return
 
     if decoy_password_opt:
@@ -225,9 +282,6 @@ def encrypt(
 
         decoy_payload = decoy_input or input_path
 
-        # Cast mode string to Literal
-        enc_mode = cast(Literal["password", "pq-hybrid"], mode)
-
         code = _handle_action(
             lambda: api.encrypt_with_decoy(
                 input_path,
@@ -235,7 +289,7 @@ def encrypt(
                 main_password=password,
                 decoy_password=decoy_password_opt,
                 input_path_decoy=decoy_payload,
-                mode=enc_mode,
+                mode=normalized_mode,
                 overwrite=overwrite,
                 argon_params=argon_params,
             ),
@@ -258,18 +312,14 @@ def encrypt(
                 ctx.exit(EXIT_USAGE)
                 return
 
-        # Cast to Literals
-        enc_mode_single = cast(Literal["password", "pq-hybrid"], mode)
-        enc_volume = cast(Literal["main", "decoy"], volume)
-
         code = _handle_action(
             lambda: api.encrypt_file(
                 input_path,
                 target,
                 password,
                 overwrite=overwrite,
-                mode=enc_mode_single,
-                volume=enc_volume,
+                mode=normalized_mode,
+                volume=cast(Literal["main", "decoy"], volume),
                 argon_params=argon_params,
             ),
         )
@@ -280,8 +330,15 @@ def encrypt(
 
 
 @cli.command(
-    help="Decrypt a .zil container into a file or directory.",
-    epilog="Examples:\n  zilenc decrypt secret.zil\n  zilenc decrypt archive.zil ./restored\n  zilenc decrypt secret.zil message.txt --overwrite",
+    help=(
+        "Decrypt a .zil container into a file or directory. Auto-detects main vs "
+        "decoy volumes unless explicitly specified."
+    ),
+    epilog=(
+        "Examples:\n  zilenc decrypt secret.zil --password pw"
+        "\n  zilenc decrypt archive.zil ./restored --overwrite"
+        "\n  zilenc decrypt pq.zil --mode pq-hybrid"
+    ),
 )
 @click.argument("container", type=click.Path(path_type=Path))
 @click.argument("output_path", required=False, type=click.Path(path_type=Path))
@@ -293,9 +350,12 @@ def encrypt(
 )
 @click.option(
     "--mode",
-    type=click.Choice(["password", "pq-hybrid"], case_sensitive=False),
+    type=click.Choice(["password", "pq-hybrid", "pq_hybrid"], case_sensitive=False),
     default=None,
-    help="Force a key mode (normally auto-detected).",
+    help=(
+        "Force a key mode (normally auto-detected). Use pq-hybrid only when oqs "
+        "is installed; otherwise the command exits with a PQ support error."
+    ),
 )
 @click.option(
     "--volume",
@@ -317,12 +377,13 @@ def decrypt(
     password = _prompt_password(password_opt)
     out_path = output_path or container.with_suffix(container.suffix + ".out")
 
-    if mode == "pq-hybrid" and not pq.available():
-        console.print("[red]Error: container requires PQ support that is not available[/red]")
-        ctx.exit(EXIT_PQ_UNSUPPORTED)
+    normalized_mode = _normalized_mode(mode)
+
+    if normalized_mode == "pq-hybrid" and not pq.available():
+        ctx.exit(_pq_error())
         return
 
-    dec_mode = cast(Literal["password", "pq-hybrid"] | None, mode)
+    dec_mode = normalized_mode
 
     if volume is None:
         volume_result: dict[str, tuple[int, str]] = {}
@@ -359,8 +420,11 @@ def decrypt(
 
 
 @cli.command(
-    help="Display container header information without decrypting payload.",
-    epilog="Example:\n  zilenc info secret.zil",
+    help=(
+        "Display container header information without decrypting payload. Supply "
+        "--password to verify which volume(s) the password unlocks."
+    ),
+    epilog="Example:\n  zilenc info secret.zil --password pw",
 )
 @click.argument("container", type=click.Path(path_type=Path))
 @click.option("--password", "password_opt", help="Password to authenticate a volume (optional).")
@@ -386,10 +450,10 @@ def info(ctx: click.Context, container: Path, password_opt: str | None, show_vol
         return
 
     validated: set[int] = set()
+    password_summary: str | None = None
     if password is not None:
         for candidate in overview.descriptors:
-            label = "main" if candidate.volume_id == 0 else "decoy" if candidate.volume_id == 1 else "all"
-            check_vol = cast(Literal["main", "decoy", "all"], label if label in {"main", "decoy"} else "all")
+            check_vol = _volume_selector(candidate.volume_id)
             try:
                 _checked, ids = api.check_container(
                     container, password=password, volume=check_vol
@@ -398,8 +462,7 @@ def info(ctx: click.Context, container: Path, password_opt: str | None, show_vol
             except InvalidPassword:
                 continue
             except PqSupportError:
-                console.print("[red]Error: container requires PQ support that is not available[/red]")
-                ctx.exit(EXIT_PQ_UNSUPPORTED)
+                ctx.exit(_pq_error())
                 return
             except ContainerFormatError:
                 console.print("[red]Error: container is corrupted or not supported[/red]")
@@ -409,6 +472,7 @@ def info(ctx: click.Context, container: Path, password_opt: str | None, show_vol
             console.print("[red]Invalid password or key[/red]")
             ctx.exit(EXIT_CRYPTO)
             return
+        password_summary = _password_match_summary(validated)
 
     # Use 'layout' instead of 'l'
     ordered_layouts = sorted(overview.layouts, key=lambda layout: layout.descriptor.volume_id)
@@ -434,6 +498,8 @@ def info(ctx: click.Context, container: Path, password_opt: str | None, show_vol
     )
     table.add_row("Primary payload", f"~{_human_size(primary_layout.ciphertext_len)}")
     table.add_row("PQ support", "available" if overview.pq_available else "unavailable")
+    if password_summary is not None:
+        table.add_row("Password matches", password_summary)
 
     console.print("[bold]Zilant container[/bold]")
     console.print(table)
@@ -467,17 +533,23 @@ def info(ctx: click.Context, container: Path, password_opt: str | None, show_vol
 
 
 @cli.command(
-    help="Validate container structure and optional integrity without writing files.",
+    help=(
+        "Validate container structure and optional integrity without writing files. "
+        "Authentication is performed when a password or mode/volume is provided."
+    ),
     epilog="Example:\n  zilenc check secret.zil --password pw --volume main",
 )
 @click.argument("container", type=click.Path(path_type=Path))
 @click.option("--password", "password_opt", help="Password for integrity verification (prompts if omitted).")
 @click.option(
     "--mode",
-    type=click.Choice(["password", "pq-hybrid"], case_sensitive=False),
+    type=click.Choice(["password", "pq-hybrid", "pq_hybrid"], case_sensitive=False),
     default=None,
     show_default=False,
-    help="Force a key mode for authentication (auto by default).",
+    help=(
+        "Force a key mode for authentication (auto by default). Use pq-hybrid only "
+        "when oqs is installed; otherwise a PQ support error is reported."
+    ),
 )
 @click.option(
     "--volume",
@@ -504,7 +576,7 @@ def check(
     perform_auth = password_opt is not None or mode is not None or volume != "all"
     password = _prompt_password(password_opt) if perform_auth else None
 
-    check_mode = cast(Literal["password", "pq-hybrid"] | None, mode)
+    check_mode = _normalized_mode(mode)
     check_volume = cast(Literal["main", "decoy", "all"], volume)
 
     def _run() -> None:
