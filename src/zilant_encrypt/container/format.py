@@ -15,6 +15,7 @@ VERSION_PQ_HYBRID = 2
 VERSION_V3 = 3
 HEADER_V1_LEN = 128
 HEADER_LEN = HEADER_V1_LEN  # backwards compatibility
+MAX_HEADER_LEN = 64 * 1024
 KEY_MODE_PASSWORD_ONLY = 0x01
 KEY_MODE_PQ_HYBRID = 0x02
 MAX_VOLUMES = 2
@@ -972,6 +973,8 @@ def read_header_from_stream(
         ) = _HEADER_STRUCT_V2.unpack(fixed)
         if header_len < _HEADER_STRUCT_V2.size:
             raise ContainerFormatError("Invalid header length")
+        if header_len > MAX_HEADER_LEN:
+            raise ContainerFormatError("Header length exceeds maximum supported size")
         remaining_len = header_len - len(prefix)
         rest = file_obj.read(remaining_len)
         header_bytes = prefix + rest
@@ -983,6 +986,8 @@ def read_header_from_stream(
         (_magic, _version, _volume_count, header_len) = _HEADER_STRUCT_V3_PREFIX.unpack(
             prefix
         )
+        if header_len > MAX_HEADER_LEN:
+            raise ContainerFormatError("Header length exceeds maximum supported size")
         remaining_len = header_len - len(prefix)
         rest = file_obj.read(remaining_len)
         header_bytes = prefix + rest
