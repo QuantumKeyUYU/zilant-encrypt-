@@ -720,6 +720,45 @@ def encrypt_file(
             f.write(tag)
 
 
+def encrypt_with_decoy(
+    input_path_main: os.PathLike[str] | str,
+    container_path: os.PathLike[str] | str,
+    *,
+    main_password: str,
+    decoy_password: str,
+    input_path_decoy: os.PathLike[str] | str | None = None,
+    mode: Literal["password", "pq_hybrid", "pq-hybrid"] = "password",
+    overwrite: bool = False,
+) -> None:
+    """Create a container with both main and decoy volumes in one call."""
+
+    main_path = Path(input_path_main)
+    decoy_path = Path(input_path_decoy) if input_path_decoy is not None else main_path
+    out_path = Path(container_path)
+
+    if out_path.exists() and not overwrite:
+        raise FileExistsError(f"Refusing to overwrite existing file: {out_path}")
+
+    effective_mode = "pq-hybrid" if mode == "pq_hybrid" else mode
+
+    encrypt_file(
+        main_path,
+        out_path,
+        main_password,
+        overwrite=overwrite,
+        mode=effective_mode,
+        volume="main",
+    )
+    encrypt_file(
+        decoy_path,
+        out_path,
+        decoy_password,
+        overwrite=False,
+        mode=effective_mode,
+        volume="decoy",
+    )
+
+
 def decrypt_file(
     container_path: Path,
     out_path: Path,
@@ -835,3 +874,148 @@ def decrypt_file(
             aad,
             ciphertext_len,
         )
+
+
+def decrypt_auto_volume(
+    container_path: os.PathLike[str] | str,
+    out_path: os.PathLike[str] | str,
+    *,
+    password: str,
+    mode: Optional[Literal["password", "pq_hybrid", "pq-hybrid"]] = None,
+    overwrite: bool = False,
+) -> tuple[int, str]:
+    """Attempt to decrypt any volume that matches the provided password.
+
+    Returns a tuple of (volume_id, volume_name) for the successfully decrypted
+    volume. Raises :class:`InvalidPassword` if none of the volumes could be
+    decrypted with the given password.
+    """
+
+    container = Path(container_path)
+    output = Path(out_path)
+
+    if not container.exists():
+        raise FileNotFoundError(container)
+
+    file_size = container.stat().st_size
+    if file_size < HEADER_V1_LEN + TAG_LEN:
+        raise ContainerFormatError("Container too small")
+
+    effective_mode = "pq-hybrid" if mode == "pq_hybrid" else mode
+
+    with container.open("rb") as f:
+        header, descriptors, header_bytes = read_header_from_stream(f)
+        aad = b""
+
+        main_descriptor = next((d for d in descriptors if d.volume_id == 0), None)
+        if main_descriptor is not None and any(d.key_mode != main_descriptor.key_mode for d in descriptors):
+            raise UnsupportedFeatureError("all volumes in a container must share the same key_mode")
+
+        # Iterate in descriptor order; if multiple volumes decrypt, prefer the
+        # one with the smallest volume_id (main first).
+        ordered = sorted(descriptors, key=lambda d: d.volume_id)
+        successful: tuple[int, str] | None = None
+
+        for descriptor in ordered:
+            expected_mode = "pq-hybrid" if descriptor.key_mode == KEY_MODE_PQ_HYBRID else "password"
+            if effective_mode is not None and effective_mode != expected_mode:
+                continue
+
+            decrypt_params = Argon2Params(
+                mem_cost_kib=descriptor.argon_mem_cost,
+                time_cost=descriptor.argon_time_cost,
+                parallelism=descriptor.argon_parallelism,
+            )
+            ciphertext_len = _ciphertext_length_for_descriptor(descriptor, descriptors, file_size)
+            if ciphertext_len <= 0:
+                raise ContainerFormatError("Invalid payload length")
+
+            try:
+                if descriptor.key_mode == KEY_MODE_PASSWORD_ONLY:
+                    if effective_mode is not None and effective_mode != "password":
+                        continue
+                    provider = PasswordKeyProvider(password, descriptor.salt_argon2, decrypt_params)
+                    file_key = provider.unwrap_file_key(
+                        WrappedKey(data=descriptor.wrapped_key, tag=descriptor.wrapped_key_tag),
+                    )
+                elif descriptor.key_mode == KEY_MODE_PQ_HYBRID:
+                    if effective_mode is not None and effective_mode != "pq-hybrid":
+                        continue
+                    if not pq.available():
+                        raise UnsupportedFeatureError("PQ-hybrid containers require oqs support")
+                    if (
+                        descriptor.pq_wrapped_secret is None
+                        or descriptor.pq_ciphertext is None
+                        or descriptor.pq_wrapped_secret_tag is None
+                    ):
+                        raise ContainerFormatError("PQ header missing required fields")
+                    password_key = derive_key_from_password(
+                        password,
+                        descriptor.salt_argon2,
+                        mem_cost=decrypt_params.mem_cost_kib,
+                        time_cost=decrypt_params.time_cost,
+                        parallelism=decrypt_params.parallelism,
+                    )
+                    try:
+                        kem_secret = AesGcmEncryptor.decrypt(
+                            password_key,
+                            WRAP_NONCE,
+                            descriptor.pq_wrapped_secret,
+                            descriptor.pq_wrapped_secret_tag,
+                            b"",
+                        )
+                    except InvalidTag as exc:
+                        raise InvalidPassword("Unable to unwrap KEM secret key") from exc
+
+                    shared_secret = pq.decapsulate(descriptor.pq_ciphertext, kem_secret)
+                    hkdf = HKDF(
+                        algorithm=hashes.SHA256(),
+                        length=32,
+                        salt=None,
+                        info=b"zilant-pq-hybrid",
+                    )
+                    master_key = hkdf.derive(shared_secret + password_key)
+                    try:
+                        file_key = AesGcmEncryptor.decrypt(
+                            master_key,
+                            WRAP_NONCE,
+                            descriptor.wrapped_key,
+                            descriptor.wrapped_key_tag,
+                            b"",
+                        )
+                    except InvalidTag as exc:
+                        raise InvalidPassword("Unable to unwrap file key") from exc
+                else:
+                    raise UnsupportedFeatureError("Unsupported key mode")
+
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    temp_out = Path(temp_dir) / "payload"
+                    writer = _PayloadWriter(temp_out)
+                    f.seek(descriptor.payload_offset)
+                    _decrypt_stream(
+                        f,
+                        writer,
+                        file_key,
+                        descriptor.nonce_aes_gcm,
+                        aad,
+                        ciphertext_len,
+                    )
+
+                    _ensure_output(output, overwrite)
+                    if temp_out.is_dir():
+                        shutil.move(str(temp_out), output)
+                    else:
+                        output.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(temp_out), output)
+
+                volume_name = "main" if descriptor.volume_id == 0 else "decoy" if descriptor.volume_id == 1 else f"id={descriptor.volume_id}"
+                successful = (descriptor.volume_id, volume_name)
+                break
+
+            except (InvalidPassword, IntegrityError):
+                continue
+
+        if successful is None:
+            raise InvalidPassword("Unable to decrypt any volume with the provided password")
+
+        return successful
