@@ -673,12 +673,12 @@ def _build_forced_header(
     )
 
 
-def _descriptor(volume_id: int, offset: int, payload_length: int) -> fmt.VolumeDescriptor:
+def _descriptor(volume_index: int, offset: int, payload_length: int) -> fmt.VolumeDescriptor:
     params = recommended_params()
-    salt = bytes([volume_id + 1]) * 16
-    nonce = bytes([volume_id + 2]) * 12
+    salt = bytes([volume_index + 1]) * 16
+    nonce = bytes([volume_index + 2]) * 12
     return fmt.VolumeDescriptor(
-        volume_id=volume_id,
+        volume_index=volume_index,
         key_mode=fmt.KEY_MODE_PASSWORD_ONLY,
         flags=0,
         payload_offset=offset,
@@ -951,9 +951,9 @@ def test_cli_auto_mode_reports_missing_pq_support(monkeypatch: pytest.MonkeyPatc
     _header, _descriptors, header_bytes = fmt.read_header_from_stream(container.open("rb"))
     descriptor_table_offset = fmt._HEADER_STRUCT_V3_PREFIX.size
     first_entry = bytearray(header_bytes[descriptor_table_offset : descriptor_table_offset + fmt._VOLUME_DESCRIPTOR_STRUCT.size])
-    (volume_id, _key_mode, flags, payload_offset, payload_length, meta_len) = fmt._VOLUME_DESCRIPTOR_STRUCT.unpack(first_entry)
+    (volume_index, _key_mode, flags, payload_offset, payload_length, meta_len) = fmt._VOLUME_DESCRIPTOR_STRUCT.unpack(first_entry)
     pq_entry = fmt._VOLUME_DESCRIPTOR_STRUCT.pack(
-        volume_id,
+        volume_index,
         fmt.KEY_MODE_PQ_HYBRID,
         flags,
         payload_offset,

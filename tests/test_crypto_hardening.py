@@ -16,7 +16,7 @@ def test_invalid_argon_params_rejected_on_derive() -> None:
     wrapped = api.WrappedKey(*api.AesGcmEncryptor.encrypt(key_ref, api.WRAP_NONCE, b"k" * 32, b""))
 
     descriptor = VolumeDescriptor(
-        volume_id=0,
+        volume_index=0,
         key_mode=KEY_MODE_PASSWORD_ONLY,
         flags=0,
         payload_offset=0,

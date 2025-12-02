@@ -30,9 +30,9 @@ def _mutate_descriptor(
     descriptor_table_offset = fmt._HEADER_STRUCT_V3_PREFIX.size
     entry_size = fmt._VOLUME_DESCRIPTOR_STRUCT.size
     entry = bytearray(header_bytes[descriptor_table_offset : descriptor_table_offset + entry_size])
-    (volume_id, key_mode, flags, old_offset, old_length, meta_len) = fmt._VOLUME_DESCRIPTOR_STRUCT.unpack(entry)
+    (volume_index, key_mode, flags, old_offset, old_length, meta_len) = fmt._VOLUME_DESCRIPTOR_STRUCT.unpack(entry)
     new_entry = fmt._VOLUME_DESCRIPTOR_STRUCT.pack(
-        volume_id,
+        volume_index,
         key_mode,
         flags,
         payload_offset if payload_offset is not None else old_offset,
@@ -132,9 +132,9 @@ def test_pq_metadata_corruption_detection(tmp_path: Path) -> None:
     first_entry = bytearray(header_bytes[descriptor_table_offset : descriptor_table_offset + entry_size])
 
     # Shrink the metadata length to truncate the pq_wrapped_secret_tag.
-    (volume_id, key_mode, flags, payload_offset, payload_length, meta_len) = fmt._VOLUME_DESCRIPTOR_STRUCT.unpack(first_entry)
+    (volume_index, key_mode, flags, payload_offset, payload_length, meta_len) = fmt._VOLUME_DESCRIPTOR_STRUCT.unpack(first_entry)
     bad_meta_len = max(0, meta_len - 4)
-    first_entry = fmt._VOLUME_DESCRIPTOR_STRUCT.pack(volume_id, key_mode, flags, payload_offset, payload_length, bad_meta_len)
+    first_entry = fmt._VOLUME_DESCRIPTOR_STRUCT.pack(volume_index, key_mode, flags, payload_offset, payload_length, bad_meta_len)
 
     corrupted_header = bytearray(header_bytes)
     corrupted_header[descriptor_table_offset : descriptor_table_offset + entry_size] = first_entry
@@ -170,9 +170,9 @@ def test_pq_container_without_support_reports_missing_engine(monkeypatch: pytest
     _header, _descriptors, header_bytes = fmt.read_header_from_stream(container.open("rb"))
     descriptor_table_offset = fmt._HEADER_STRUCT_V3_PREFIX.size
     first_entry = bytearray(header_bytes[descriptor_table_offset : descriptor_table_offset + fmt._VOLUME_DESCRIPTOR_STRUCT.size])
-    (volume_id, _key_mode, flags, payload_offset, payload_length, meta_len) = fmt._VOLUME_DESCRIPTOR_STRUCT.unpack(first_entry)
+    (volume_index, _key_mode, flags, payload_offset, payload_length, meta_len) = fmt._VOLUME_DESCRIPTOR_STRUCT.unpack(first_entry)
     pq_entry = fmt._VOLUME_DESCRIPTOR_STRUCT.pack(
-        volume_id,
+        volume_index,
         fmt.KEY_MODE_PQ_HYBRID,
         flags,
         payload_offset,

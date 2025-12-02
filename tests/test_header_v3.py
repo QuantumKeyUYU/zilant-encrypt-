@@ -12,7 +12,7 @@ from zilant_encrypt.container.format import (
 
 def test_build_and_parse_v3_header() -> None:
     main_descriptor = VolumeDescriptor(
-        volume_id=0,
+        volume_index=0,
         key_mode=KEY_MODE_PASSWORD_ONLY,
         flags=0,
         payload_offset=0,
@@ -27,7 +27,7 @@ def test_build_and_parse_v3_header() -> None:
         reserved=bytes(RESERVED_LEN),
     )
     extra_descriptor = VolumeDescriptor(
-        volume_id=1,
+        volume_index=1,
         key_mode=KEY_MODE_PASSWORD_ONLY,
         flags=0,
         payload_offset=4096,
@@ -48,8 +48,8 @@ def test_build_and_parse_v3_header() -> None:
 
     assert header.version == VERSION_V3
     assert len(descriptors) == 2
-    assert descriptors[0].volume_id == 0
+    assert descriptors[0].volume_index == 0
     assert descriptors[0].payload_offset == len(header_bytes)
-    assert descriptors[1].volume_id == 1
+    assert descriptors[1].volume_index == 1
     assert descriptors[1].payload_offset == 4096
     assert descriptors[1].argon_mem_cost == 2048

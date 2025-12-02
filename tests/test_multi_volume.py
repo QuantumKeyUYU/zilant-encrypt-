@@ -43,17 +43,17 @@ def test_main_and_decoy_roundtrip_password_only(tmp_path: Path) -> None:
     main_out = tmp_path / "main_out.txt"
     decoy_out = tmp_path / "decoy_out.txt"
 
-    api.decrypt_file(container, main_out, "pass-main", volume="main")
-    api.decrypt_file(container, decoy_out, "pass-decoy", volume="decoy")
+    api.decrypt_file(container, main_out, "pass-main", volume_selector="main")
+    api.decrypt_file(container, decoy_out, "pass-decoy", volume_selector="decoy")
 
     assert main_out.read_text() == "MAIN"
     assert decoy_out.read_text() == "DECOY"
     assert main_out.read_text() != decoy_out.read_text()
 
     with pytest.raises(InvalidPassword):
-        api.decrypt_file(container, tmp_path / "wrong_main.txt", "pass-decoy", volume="main")
+        api.decrypt_file(container, tmp_path / "wrong_main.txt", "pass-decoy", volume_selector="main")
     with pytest.raises(InvalidPassword):
-        api.decrypt_file(container, tmp_path / "wrong_decoy.txt", "pass-main", volume="decoy")
+        api.decrypt_file(container, tmp_path / "wrong_decoy.txt", "pass-main", volume_selector="decoy")
 
 
 def test_decoy_requires_rebuild(tmp_path: Path) -> None:
@@ -62,12 +62,12 @@ def test_decoy_requires_rebuild(tmp_path: Path) -> None:
     out_path = tmp_path / "new.zil"
 
     with pytest.raises(UnsupportedFeatureError):
-        api.encrypt_file(payload, out_path, "pw", volume="decoy")
+        api.encrypt_file(payload, out_path, "pw", volume_selector="decoy")
 
-    api.encrypt_file(payload, out_path, "pw", volume="main")
+    api.encrypt_file(payload, out_path, "pw", volume_selector="main")
 
     with pytest.raises(UnsupportedFeatureError):
-        api.encrypt_file(payload, out_path, "pw2", volume="decoy")
+        api.encrypt_file(payload, out_path, "pw2", volume_selector="decoy")
 
 
 def test_decoy_must_match_main_key_mode(tmp_path: Path) -> None:
@@ -75,17 +75,17 @@ def test_decoy_must_match_main_key_mode(tmp_path: Path) -> None:
     payload.write_text("hello")
     container = tmp_path / "vault.zil"
 
-    api.encrypt_file(payload, container, "pw", volume="main", mode="password")
+    api.encrypt_file(payload, container, "pw", volume_selector="main", mode="password")
     with pytest.raises(UnsupportedFeatureError):
-        api.encrypt_file(payload, container, "pw", volume="decoy", mode="pq-hybrid")
+        api.encrypt_file(payload, container, "pw", volume_selector="decoy", mode="pq-hybrid")
 
     if not pq.available():
         pytest.skip("oqs not available")
 
     pq_container = tmp_path / "pq.zil"
-    api.encrypt_file(payload, pq_container, "pw", volume="main", mode="pq-hybrid")
+    api.encrypt_file(payload, pq_container, "pw", volume_selector="main", mode="pq-hybrid")
     with pytest.raises(UnsupportedFeatureError):
-        api.encrypt_file(payload, pq_container, "pw", volume="decoy", mode="password")
+        api.encrypt_file(payload, pq_container, "pw", volume_selector="decoy", mode="password")
 
 
 def test_encrypt_decrypt_pq_main_and_decoy(tmp_path: Path) -> None:
@@ -112,8 +112,8 @@ def test_encrypt_decrypt_pq_main_and_decoy(tmp_path: Path) -> None:
     main_out = tmp_path / "main_out.txt"
     decoy_out = tmp_path / "decoy_out.txt"
 
-    api.decrypt_file(container, main_out, "pw-main", volume="main")
-    api.decrypt_file(container, decoy_out, "pw-decoy", volume="decoy")
+    api.decrypt_file(container, main_out, "pw-main", volume_selector="main")
+    api.decrypt_file(container, decoy_out, "pw-decoy", volume_selector="decoy")
 
     assert main_out.read_text() == "MAIN"
     assert decoy_out.read_text() == "DECOY"
@@ -139,8 +139,8 @@ def test_encrypt_with_decoy_helper_roundtrip(tmp_path: Path) -> None:
 
     main_out = tmp_path / "main_out.txt"
     decoy_out = tmp_path / "decoy_out.txt"
-    api.decrypt_file(container, main_out, "main-pass", volume="main")
-    api.decrypt_file(container, decoy_out, "decoy-pass", volume="decoy")
+    api.decrypt_file(container, main_out, "main-pass", volume_selector="main")
+    api.decrypt_file(container, decoy_out, "decoy-pass", volume_selector="decoy")
 
     assert main_out.read_text() == "MAIN"
     assert decoy_out.read_text() == "DECOY"
@@ -176,8 +176,8 @@ def test_encrypt_with_decoy_helper_roundtrip_pq(tmp_path: Path) -> None:
 
     main_out = tmp_path / "main_out.txt"
     decoy_out = tmp_path / "decoy_out.txt"
-    api.decrypt_file(container, main_out, "main-pass", volume="main")
-    api.decrypt_file(container, decoy_out, "decoy-pass", volume="decoy")
+    api.decrypt_file(container, main_out, "main-pass", volume_selector="main")
+    api.decrypt_file(container, decoy_out, "decoy-pass", volume_selector="decoy")
 
     assert main_out.read_text() == "MAIN"
     assert decoy_out.read_text() == "DECOY"
@@ -271,12 +271,12 @@ def test_check_container_validates_each_volume(tmp_path: Path) -> None:
         overwrite=True,
     )
 
-    overview, validated_main = api.check_container(container, password="main-pass", mode="password", volume="main")
+    overview, validated_main = api.check_container(container, password="main-pass", mode="password", volume_selector="main")
     assert overview.descriptors
     assert validated_main == [0]
 
     _overview2, validated_decoy = api.check_container(
-        container, password="decoy-pass", mode="password", volume="decoy"
+        container, password="decoy-pass", mode="password", volume_selector="decoy"
     )
     assert validated_decoy == [1]
 
@@ -285,7 +285,7 @@ def test_corrupted_header_bytes_fail_integrity(tmp_path: Path) -> None:
     payload = tmp_path / "data.txt"
     payload.write_text("secret")
     container = tmp_path / "vault.zil"
-    api.encrypt_file(payload, container, "pw", volume="main")
+    api.encrypt_file(payload, container, "pw", volume_selector="main")
 
     with container.open("rb") as f:
         _header, descriptors, header_bytes = read_header_from_stream(f)
@@ -307,7 +307,7 @@ def test_container_rejects_excess_volumes(tmp_path: Path) -> None:
     salt = b"s" * 16
     nonce = b"n" * 12
     descriptor = VolumeDescriptor(
-        volume_id=0,
+        volume_index=0,
         key_mode=KEY_MODE_PASSWORD_ONLY,
         flags=0,
         payload_offset=128,
@@ -345,7 +345,7 @@ def test_container_rejects_overlapping_volumes(tmp_path: Path) -> None:
     salt = b"s" * 16
     nonce = b"n" * 12
     base_descriptor = VolumeDescriptor(
-        volume_id=0,
+        volume_index=0,
         key_mode=KEY_MODE_PASSWORD_ONLY,
         flags=0,
         payload_offset=256,
@@ -361,7 +361,7 @@ def test_container_rejects_overlapping_volumes(tmp_path: Path) -> None:
     )
 
     overlap_descriptor = VolumeDescriptor(
-        volume_id=1,
+        volume_index=1,
         key_mode=KEY_MODE_PASSWORD_ONLY,
         flags=0,
         payload_offset=base_descriptor.payload_offset + 10,

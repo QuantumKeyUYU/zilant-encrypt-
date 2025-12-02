@@ -61,7 +61,7 @@ _VOLUME_DESCRIPTOR_STRUCT = Struct("<BBHQQI")
 
 @dataclass(frozen=True)
 class VolumeDescriptor:
-    volume_id: int
+    volume_index: int
     key_mode: int
     flags: int
     payload_offset: int
@@ -100,7 +100,7 @@ class ContainerHeader:
 
     def to_bytes(self) -> bytes:
         volume = VolumeDescriptor(
-            volume_id=0,
+            volume_index=0,
             key_mode=self.key_mode,
             flags=self.header_flags,
             payload_offset=self.header_len,
@@ -376,7 +376,7 @@ def build_header_v3(
         payload_offset = desc.payload_offset
         descriptor_table.extend(
             _VOLUME_DESCRIPTOR_STRUCT.pack(
-                desc.volume_id,
+                desc.volume_index,
                 desc.key_mode,
                 desc.flags,
                 payload_offset,
@@ -515,7 +515,7 @@ def _parse_header_v1(data: bytes) -> tuple[ContainerHeader, list[VolumeDescripto
     )
 
     descriptor = VolumeDescriptor(
-        volume_id=0,
+        volume_index=0,
         key_mode=key_mode,
         flags=header_flags,
         payload_offset=HEADER_V1_LEN,
@@ -597,7 +597,7 @@ def _parse_header_v2(data: bytes) -> tuple[ContainerHeader, list[VolumeDescripto
     )
 
     descriptor = VolumeDescriptor(
-        volume_id=0,
+        volume_index=0,
         key_mode=key_mode,
         flags=header_flags,
         payload_offset=header_len,
@@ -674,7 +674,7 @@ def _parse_volume_meta_common(
     offset += pq_wrapped_secret_len
 
     descriptor = VolumeDescriptor(
-        volume_id=0,
+        volume_index=0,
         key_mode=key_mode,
         flags=header_flags,
         payload_offset=0,
@@ -726,7 +726,7 @@ def _parse_volume_meta_password_legacy(data: bytes, header_flags: int) -> tuple[
         raise ContainerFormatError("Reserved bytes must be zero")
 
     descriptor = VolumeDescriptor(
-        volume_id=0,
+        volume_index=0,
         key_mode=KEY_MODE_PASSWORD_ONLY,
         flags=header_flags,
         payload_offset=0,
@@ -782,7 +782,7 @@ def _parse_volume_meta_pq_legacy(data: bytes, header_flags: int) -> tuple[Volume
         raise ContainerFormatError("Invalid wrapped_key_len")
 
     descriptor = VolumeDescriptor(
-        volume_id=0,
+        volume_index=0,
         key_mode=KEY_MODE_PQ_HYBRID,
         flags=header_flags,
         payload_offset=0,
@@ -831,7 +831,7 @@ def parse_header_v3(data: bytes) -> tuple[ContainerHeader, list[VolumeDescriptor
     for idx in range(volume_count):
         start = _HEADER_STRUCT_V3_PREFIX.size + idx * _VOLUME_DESCRIPTOR_STRUCT.size
         (
-            volume_id,
+            volume_index,
             key_mode,
             flags,
             payload_offset,
@@ -859,7 +859,7 @@ def parse_header_v3(data: bytes) -> tuple[ContainerHeader, list[VolumeDescriptor
             raise ContainerFormatError("Volume metadata length mismatch")
 
         descriptor = VolumeDescriptor(
-            volume_id=volume_id,
+            volume_index=volume_index,
             key_mode=descriptor.key_mode,
             flags=descriptor.flags,
             payload_offset=payload_offset,
