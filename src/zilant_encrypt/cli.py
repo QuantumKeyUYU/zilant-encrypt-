@@ -19,6 +19,7 @@ from zilant_encrypt.container.format import (
     KEY_MODE_PQ_HYBRID,
     read_header_from_stream,
 )
+from zilant_encrypt.crypto.aead import TAG_LEN
 from zilant_encrypt.crypto import pq
 from zilant_encrypt.errors import (
     ContainerFormatError,
@@ -110,6 +111,13 @@ def cli() -> None:
     help="Key protection mode.",
 )
 @click.option(
+    "--volume",
+    type=click.Choice(["main", "decoy"], case_sensitive=False),
+    default="main",
+    show_default=True,
+    help="Target volume (main or decoy).",
+)
+@click.option(
     "--overwrite/--no-overwrite",
     default=False,
     help="Overwrite output if it already exists.",
@@ -122,6 +130,7 @@ def encrypt(
     password_opt: str | None,
     overwrite: bool,
     mode: str,
+    volume: str,
 ) -> None:
     password = _prompt_password(password_opt)
     target = output_path or input_path.with_suffix(f"{input_path.suffix}.zil")
@@ -131,8 +140,25 @@ def encrypt(
         ctx.exit(EXIT_USAGE)
         return
 
+    if volume == "decoy" and not target.exists():
+        console.print("[red]decoy volume can only be added to an existing v3 container[/red]")
+        ctx.exit(EXIT_USAGE)
+        return
+    if volume == "decoy" and target.exists():
+        try:
+            with target.open("rb") as f:
+                header, _descriptors, _header_bytes = read_header_from_stream(f)
+            if header.version != 3:
+                raise ContainerFormatError("decoy volume requires v3 container header")
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]decoy volume can only be added to an existing v3 container:[/red] {exc}")
+            ctx.exit(EXIT_USAGE)
+            return
+
     code = _handle_action(
-        lambda: api.encrypt_file(input_path, target, password, overwrite=overwrite, mode=mode),
+        lambda: api.encrypt_file(
+            input_path, target, password, overwrite=overwrite, mode=mode, volume=volume
+        ),
     )
     if code == EXIT_SUCCESS:
         size = target.stat().st_size if target.exists() else 0
@@ -158,6 +184,13 @@ def encrypt(
     default=None,
     help="Force a key mode (normally auto-detected).",
 )
+@click.option(
+    "--volume",
+    type=click.Choice(["main", "decoy"], case_sensitive=False),
+    default="main",
+    show_default=True,
+    help="Which volume to decrypt.",
+)
 @click.pass_context
 def decrypt(
     ctx: click.Context,
@@ -166,12 +199,15 @@ def decrypt(
     password_opt: str | None,
     overwrite: bool,
     mode: str | None,
+    volume: str,
 ) -> None:
     password = _prompt_password(password_opt)
     out_path = output_path or container.with_suffix(container.suffix + ".out")
 
     code = _handle_action(
-        lambda: api.decrypt_file(container, out_path, password, overwrite=overwrite, mode=mode),
+        lambda: api.decrypt_file(
+            container, out_path, password, overwrite=overwrite, mode=mode, volume=volume
+        ),
     )
     if code == EXIT_SUCCESS:
         console.print(f"[green]Decrypted to[/green] {out_path}.")
@@ -195,7 +231,7 @@ def info(ctx: click.Context, container: Path) -> None:
     header_bytes = data[:HEADER_V1_LEN]
     try:
         with container.open("rb") as f:
-            header, _descriptors, header_bytes = read_header_from_stream(f)
+            header, descriptors, header_bytes = read_header_from_stream(f)
     except (ContainerFormatError, UnsupportedFeatureError) as exc:
         console.print(f"[red]Unsupported or invalid container:[/red] {exc}")
         ctx.exit(EXIT_CRYPTO)
@@ -219,6 +255,19 @@ def info(ctx: click.Context, container: Path) -> None:
 
     console.print("[bold]Zilant container[/bold]")
     console.print(table)
+
+    console.print("Volumes:")
+    ordered = sorted(descriptors, key=lambda d: d.volume_id)
+    for desc in ordered:
+        name = "main" if desc.volume_id == 0 else "decoy" if desc.volume_id == 1 else f"id={desc.volume_id}"
+        size = desc.payload_length if desc.payload_length else max(len(data) - desc.payload_offset - TAG_LEN, 0)
+        if desc.key_mode == KEY_MODE_PQ_HYBRID:
+            mode_label = "pq-hybrid"
+        elif desc.key_mode == KEY_MODE_PASSWORD_ONLY:
+            mode_label = "password"
+        else:
+            mode_label = f"unknown ({desc.key_mode})"
+        console.print(f"  - {name} (id={desc.volume_id}, key_mode={mode_label}, size≈{_human_size(size)})")
     ctx.exit(EXIT_SUCCESS)
 
 
