@@ -58,7 +58,7 @@ def test_unsupported_key_mode() -> None:
     header_bytes = bytearray(_build_sample_header())
 
     # Принудительно выставляем другой key_mode (например, PQ hybrid)
-    header_bytes[7] = 1
+    header_bytes[7] = 0x02
 
     with pytest.raises(UnsupportedFeatureError):
         parse_header(bytes(header_bytes))

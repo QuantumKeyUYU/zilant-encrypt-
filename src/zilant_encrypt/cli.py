@@ -13,7 +13,8 @@ from rich.table import Table
 
 from zilant_encrypt import __version__
 from zilant_encrypt.container import api
-from zilant_encrypt.container.format import HEADER_LEN, parse_header
+from zilant_encrypt.container.format import HEADER_V1_LEN, KEY_MODE_PASSWORD_ONLY, KEY_MODE_PQ_HYBRID, read_header_from_stream
+from zilant_encrypt.crypto import pq
 from zilant_encrypt.errors import (
     ContainerFormatError,
     IntegrityError,
@@ -97,6 +98,13 @@ def cli() -> None:
 @click.argument("output_path", required=False, type=click.Path(path_type=Path))
 @click.option("--password", "password_opt", help="Encryption password (will prompt if omitted).")
 @click.option(
+    "--mode",
+    type=click.Choice(["password", "pq-hybrid"], case_sensitive=False),
+    default="password",
+    show_default=True,
+    help="Key protection mode.",
+)
+@click.option(
     "--overwrite/--no-overwrite",
     default=False,
     help="Overwrite output if it already exists.",
@@ -108,11 +116,19 @@ def encrypt(
     output_path: Path | None,
     password_opt: str | None,
     overwrite: bool,
+    mode: str,
 ) -> None:
     password = _prompt_password(password_opt)
     target = output_path or input_path.with_suffix(f"{input_path.suffix}.zil")
 
-    code = _handle_action(lambda: api.encrypt_file(input_path, target, password, overwrite=overwrite))
+    if mode == "pq-hybrid" and not pq.available():
+        console.print("[red]PQ-hybrid режим недоступен (oqs не установлен).[/red]")
+        ctx.exit(EXIT_USAGE)
+        return
+
+    code = _handle_action(
+        lambda: api.encrypt_file(input_path, target, password, overwrite=overwrite, mode=mode),
+    )
     if code == EXIT_SUCCESS:
         size = target.stat().st_size if target.exists() else 0
         console.print(f"[green]Encrypted to[/green] {target} (~{_human_size(size)}).")
@@ -131,6 +147,12 @@ def encrypt(
     default=False,
     help="Overwrite existing files/directories at the destination.",
 )
+@click.option(
+    "--mode",
+    type=click.Choice(["password", "pq-hybrid"], case_sensitive=False),
+    default=None,
+    help="Force a key mode (normally auto-detected).",
+)
 @click.pass_context
 def decrypt(
     ctx: click.Context,
@@ -138,11 +160,14 @@ def decrypt(
     output_path: Path | None,
     password_opt: str | None,
     overwrite: bool,
+    mode: str | None,
 ) -> None:
     password = _prompt_password(password_opt)
     out_path = output_path or container.with_suffix(container.suffix + ".out")
 
-    code = _handle_action(lambda: api.decrypt_file(container, out_path, password, overwrite=overwrite))
+    code = _handle_action(
+        lambda: api.decrypt_file(container, out_path, password, overwrite=overwrite, mode=mode),
+    )
     if code == EXIT_SUCCESS:
         console.print(f"[green]Decrypted to[/green] {out_path}.")
     ctx.exit(code)
@@ -162,18 +187,25 @@ def info(ctx: click.Context, container: Path) -> None:
         ctx.exit(EXIT_FS)
         return
 
-    header_bytes = data[:HEADER_LEN]
+    header_bytes = data[:HEADER_V1_LEN]
     try:
-        header = parse_header(header_bytes)
+        with container.open("rb") as f:
+            header, header_bytes = read_header_from_stream(f)
     except (ContainerFormatError, UnsupportedFeatureError) as exc:
         console.print(f"[red]Unsupported or invalid container:[/red] {exc}")
         ctx.exit(EXIT_CRYPTO)
         return
 
-    payload_size = max(len(data) - HEADER_LEN, 0)
+    payload_size = max(len(data) - header.header_len, 0)
     table = Table(show_header=False, box=None)
-    table.add_row("Magic/Version", "ZILENC / 1")
-    table.add_row("Key mode", str(header.key_mode))
+    table.add_row("Magic/Version", f"ZILENC / {header.version}")
+    if header.key_mode == KEY_MODE_PQ_HYBRID:
+        mode_label = "pq-hybrid (experimental)"
+    elif header.key_mode == KEY_MODE_PASSWORD_ONLY:
+        mode_label = "password-only"
+    else:
+        mode_label = f"unknown ({header.key_mode})"
+    table.add_row("Key mode", mode_label)
     table.add_row(
         "Argon2id",
         f"mem={header.argon_mem_cost} KiB, time={header.argon_time_cost}, p={header.argon_parallelism}",
