@@ -1,9 +1,30 @@
 # Zilant Encrypt
 
-Zilant Encrypt is a password-based container format (`.zil`) and CLI that uses AES-256-GCM
-and Argon2id. This 0.1 release focuses on a production-ready password-only mode while
-keeping space for future PQ/hybrid features. An experimental PQ-hybrid mode using
-Kyber768 is available when the optional `oqs` dependency is installed.
+Zilant Encrypt is a modern `.zil` container format and CLI focused on strong
+password-based encryption with an optional post-quantum hybrid mode. v3 adds
+main + decoy volumes, richer inspection commands, and hardened metadata so the
+tool is usable without reading the source.
+
+## Features
+
+* **Post-quantum hybrid encryption** (Argon2id + Kyber768 via `oqs`) with
+  automatic fallback to password-only when PQ support is unavailable.
+* **Decoy/hidden volumes** for plausible deniability; decoy metadata remains
+  undisclosed unless you request verbose volume listings or authenticate it.
+* **Auto-volume detection** on decrypt: the password selects the matching volume
+  (main or decoy) without extra flags.
+* **Structured checks**: `zilenc info` for summaries and `zilenc check` for
+  integrity/structure validation without writing files.
+
+## Documentation
+
+* [Usage guide (v3)](docs/USAGE_V3.md) – quickstarts for password-only and
+  PQ-hybrid modes, decoy volumes, auto-mode behavior, and common errors.
+* [Desktop PQ installation](docs/INSTALL_PQ_DESKTOP.md) – how to install
+  `liboqs` and the Python `oqs` bindings on Linux, macOS, and Windows, plus
+  fallback behavior when PQ is missing.
+* [Technical specification](docs/TECHNICAL_SPEC_V3.md) – full container and
+  cryptographic details.
 
 ## Installation
 
@@ -15,65 +36,67 @@ python -m pip install .[dev]
 
 ## Quick start
 
-Encrypt a single file:
+Encrypt a single file (password-only by default):
 
 ```bash
 zilenc encrypt secrets.txt secrets.zil --password "s3cret"
 ```
 
-Encrypt a directory (unicode file names are supported) and let the output default to
-`<folder>.zil`:
+Encrypt a directory (Unicode file names are supported) and let the output
+default to `<folder>.zil`:
 
 ```bash
 zilenc encrypt ./project
 ```
 
-Decrypt a container. If `--password` is omitted you will be prompted securely:
+Enable PQ-hybrid when `oqs` is installed:
 
 ```bash
-zilenc decrypt secrets.zil restored.txt
-zilenc decrypt project.zil ./restored-project
+zilenc encrypt report.pdf report.zil --password "pw" --mode pq-hybrid
 ```
 
-Inspect container metadata without decrypting payload:
+Create main + decoy in one pass:
 
 ```bash
-zilenc info secrets.zil
+zilenc encrypt docs/ vault.zil \
+  --password "real-pass" \
+  --decoy-password "cover-pass" \
+  --decoy-input decoy_notes/
 ```
 
-Key flags:
+Decrypt and let auto-mode pick the right volume for the provided password:
 
-* `--overwrite/--no-overwrite` – allow replacing existing outputs (files or directories).
-* `--password` – pass the password non-interactively; otherwise a TTY prompt is used.
-* `--version` – show the CLI version.
+```bash
+zilenc decrypt secrets.zil ./restored --password "s3cret"
+```
 
-## How the container is structured
+Inspect and verify containers without decrypting payloads:
 
-* A fixed 128-byte header (v1, password-only) containing magic/version, Argon2id
-  parameters, nonce, and the wrapped file key.
-* Version 2 headers are variable length and include PQ-hybrid metadata: KEM ciphertext
-  and a password-wrapped KEM secret key (temporary storage strategy for this MVP).
-* Payload is encrypted with AES-256-GCM using a random file key; the file key is wrapped
-  with a password-derived key (Argon2id) or with a hybrid master key (Argon2id + KEM
-  shared secret) in PQ mode.
-* Directory inputs are archived into a ZIP before encryption; on decrypt they are
-  unpacked into the provided output path.
+```bash
+zilenc info secrets.zil --volumes
+zilenc check secrets.zil --password "s3cret"
+```
+
+## v3 container format (brief)
+
+* AES-256-GCM encrypts payloads and authenticates the plaintext header as AAD;
+  tampering the header invalidates the GCM tag.
+* Per-volume Argon2id parameters (memory, time, parallelism) are stored in the
+  header and reproduced during decryption; defaults are 64 MiB, 3 iterations,
+  parallelism 1.
+* PQ-hybrid metadata adds Kyber768 ciphertext + wrapped secrets. When PQ support
+  is missing at runtime, containers created with password-only remain usable;
+  PQ-only volumes require `oqs` and fail with exit code `5` otherwise.
+* Up to two volumes (main and optional decoy). Decoy headers mirror the main
+  structure; `zilenc info` hides decoy entries unless `--volumes` or successful
+  authentication reveals them.
 
 ## Security notes
 
-* Password-only mode with AES-256-GCM and Argon2id.
-* Experimental PQ-hybrid mode (Argon2id + Kyber768 via `oqs`) derives a master key from
-  both the password-derived key and the KEM shared secret.
-* Default Argon2id profile: 64 MiB memory, time_cost=3, parallelism=1 – a balanced
-  setting for interactive use while resisting brute force.
-* No post-quantum/hybrid keying or hidden volumes yet; these are planned for future
-  releases.
-
-## Limitations in 0.1
-
-* PQ-hybrid requires the optional `oqs` dependency; without it the feature is disabled
-  and related tests are skipped.
-* PQ-hybrid compatibility is experimental and may change between releases.
+* AES-256-GCM with Argon2id password derivation by default; PQ-hybrid mixes the
+  Argon2id output with the Kyber shared secret before wrapping keys.
+* The CLI avoids logging sensitive inputs. Invalid passwords, corrupted
+  containers, and missing PQ support surface distinct errors to aid triage.
 
 ## Running tests
 
