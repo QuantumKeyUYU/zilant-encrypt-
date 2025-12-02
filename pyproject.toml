@@ -23,6 +23,7 @@ zilenc = "zilant_encrypt.cli:main"
 dev = [
     "pytest>=8",
     "pytest-cov>=4",
+    "hypothesis>=6",
     "black>=24",
     "ruff>=0.4",
     "isort>=5",
