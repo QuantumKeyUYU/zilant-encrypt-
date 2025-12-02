@@ -71,19 +71,18 @@ def test_cli_encrypt_decrypt_decoy(tmp_path: Path) -> None:
 
     container = tmp_path / "double.zil"
 
-    result = runner.invoke(cli, ["encrypt", str(main_src), str(container), "--password", "pw-main"])
-    assert result.exit_code == EXIT_SUCCESS
-
     result = runner.invoke(
         cli,
         [
             "encrypt",
-            str(decoy_src),
+            str(main_src),
             str(container),
             "--password",
+            "pw-main",
+            "--decoy-password",
             "pw-decoy",
-            "--volume",
-            "decoy",
+            "--decoy-input",
+            str(decoy_src),
         ],
     )
     assert result.exit_code == EXIT_SUCCESS

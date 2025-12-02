@@ -386,213 +386,10 @@ def encrypt_file(
     if requested_mode == "pq-hybrid" and not pq.available():
         raise UnsupportedFeatureError("PQ-hybrid mode is not available (oqs not installed)")
 
-    if volume == "decoy" and is_new:
-        raise UnsupportedFeatureError("decoy volume can only be added to an existing v3 container")
-
-    if is_new and volume != "main":
-        raise UnsupportedFeatureError("decoy volume requires an existing container")
-
     if volume == "decoy":
-        file_size = out_path.stat().st_size
-        with out_path.open("rb") as src:
-            header, descriptors, header_bytes = read_header_from_stream(src)
-
-        if header.version != VERSION_V3:
-            raise UnsupportedFeatureError("decoy volume requires v3 container header")
-
-        main_descriptor = next((d for d in descriptors if d.volume_id == 0), None)
-        if main_descriptor is None:
-            raise ContainerFormatError("Main volume missing from container")
-
-        # Ensure all existing descriptors share the same key_mode.
-        if any(d.key_mode != main_descriptor.key_mode for d in descriptors):
-            raise UnsupportedFeatureError(
-                "all volumes in a container must share the same key_mode",
-            )
-
-        container_mode = "pq-hybrid" if main_descriptor.key_mode == KEY_MODE_PQ_HYBRID else "password"
-        effective_mode = requested_mode or container_mode
-        if effective_mode != container_mode:
-            raise UnsupportedFeatureError(
-                "cannot create decoy volume with different key_mode than main volume",
-            )
-
-        if container_mode == "pq-hybrid" and not pq.available():
-            raise UnsupportedFeatureError("PQ-hybrid mode is not available (oqs not installed)")
-
-        main_cipher_len = _ciphertext_length_for_descriptor(main_descriptor, descriptors, file_size)
-
-        with _PayloadSource(in_path) as payload_source:
-            payload_header = _build_payload_header(payload_source.meta)
-            plaintext_len = len(payload_header) + payload_source.path.stat().st_size
-
-            salt = os.urandom(16)
-            nonce = os.urandom(12)
-            file_key = os.urandom(32)
-
-            if main_descriptor.key_mode == KEY_MODE_PASSWORD_ONLY:
-                provider = _PasswordOnlyProviderFactory(password, argon_params, salt).build()
-                wrapped_key = provider.wrap_file_key(file_key)
-                decoy_descriptor = VolumeDescriptor(
-                    volume_id=1,
-                    key_mode=KEY_MODE_PASSWORD_ONLY,
-                    flags=0,
-                    payload_offset=0,
-                    payload_length=plaintext_len,
-                    salt_argon2=salt,
-                    argon_mem_cost=argon_params.mem_cost_kib,
-                    argon_time_cost=argon_params.time_cost,
-                    argon_parallelism=argon_params.parallelism,
-                    nonce_aes_gcm=nonce,
-                    wrapped_key=wrapped_key.data,
-                    wrapped_key_tag=wrapped_key.tag,
-                    reserved=bytes(RESERVED_LEN),
-                )
-            else:
-                password_key = derive_key_from_password(
-                    password,
-                    salt,
-                    mem_cost=argon_params.mem_cost_kib,
-                    time_cost=argon_params.time_cost,
-                    parallelism=argon_params.parallelism,
-                )
-                public_key, secret_key = pq.generate_kem_keypair()
-                kem_ciphertext, shared_secret = pq.encapsulate(public_key)
-
-                hkdf = HKDF(
-                    algorithm=hashes.SHA256(),
-                    length=32,
-                    salt=None,
-                    info=b"zilant-pq-hybrid",
-                )
-                master_key = hkdf.derive(shared_secret + password_key)
-
-                wrapped_key_data, wrapped_key_tag = AesGcmEncryptor.encrypt(
-                    master_key,
-                    WRAP_NONCE,
-                    file_key,
-                    b"",
-                )
-                wrapped_secret, wrapped_secret_tag = AesGcmEncryptor.encrypt(
-                    password_key,
-                    WRAP_NONCE,
-                    secret_key,
-                    b"",
-                )
-
-                decoy_descriptor = VolumeDescriptor(
-                    volume_id=1,
-                    key_mode=KEY_MODE_PQ_HYBRID,
-                    flags=0,
-                    payload_offset=0,
-                    payload_length=plaintext_len,
-                    salt_argon2=salt,
-                    argon_mem_cost=argon_params.mem_cost_kib,
-                    argon_time_cost=argon_params.time_cost,
-                    argon_parallelism=argon_params.parallelism,
-                    nonce_aes_gcm=nonce,
-                    wrapped_key=wrapped_key_data,
-                    wrapped_key_tag=wrapped_key_tag,
-                    reserved=bytes(RESERVED_LEN),
-                    pq_ciphertext=kem_ciphertext,
-                    pq_wrapped_secret=wrapped_secret,
-                    pq_wrapped_secret_tag=wrapped_secret_tag,
-                )
-
-            updated_main = replace(
-                main_descriptor,
-                payload_offset=0,
-                payload_length=main_cipher_len,
-            )
-
-            other = [d for d in descriptors if d.volume_id not in (0, 1)]
-            existing_decoy = next((d for d in descriptors if d.volume_id == 1), None)
-            if existing_decoy is not None:
-                other = [d for d in other if d.volume_id != 1]
-
-            descriptors_out = [updated_main] + other + [decoy_descriptor]
-
-            temp_header = build_header(
-                key_mode=updated_main.key_mode,
-                header_flags=updated_main.flags,
-                salt_argon2=updated_main.salt_argon2,
-                argon_mem_cost=updated_main.argon_mem_cost,
-                argon_time_cost=updated_main.argon_time_cost,
-                argon_parallelism=updated_main.argon_parallelism,
-                nonce_aes_gcm=updated_main.nonce_aes_gcm,
-                wrapped_key=updated_main.wrapped_key,
-                wrapped_key_tag=updated_main.wrapped_key_tag,
-                reserved=updated_main.reserved,
-                version=VERSION_V3,
-                pq_ciphertext=updated_main.pq_ciphertext,
-                pq_wrapped_secret=updated_main.pq_wrapped_secret,
-                pq_wrapped_secret_tag=updated_main.pq_wrapped_secret_tag,
-                volume_descriptors=descriptors_out,
-                common_meta={},
-            )
-
-            header_len = len(temp_header)
-
-            updated_main = replace(updated_main, payload_offset=header_len)
-            decoy_descriptor = replace(
-                decoy_descriptor,
-                payload_offset=header_len + main_cipher_len + TAG_LEN,
-            )
-
-            final_descriptors = [updated_main] + other + [decoy_descriptor]
-
-            header_bytes = build_header(
-                key_mode=updated_main.key_mode,
-                header_flags=updated_main.flags,
-                salt_argon2=updated_main.salt_argon2,
-                argon_mem_cost=updated_main.argon_mem_cost,
-                argon_time_cost=updated_main.argon_time_cost,
-                argon_parallelism=updated_main.argon_parallelism,
-                nonce_aes_gcm=updated_main.nonce_aes_gcm,
-                wrapped_key=updated_main.wrapped_key,
-                wrapped_key_tag=updated_main.wrapped_key_tag,
-                reserved=updated_main.reserved,
-                version=VERSION_V3,
-                pq_ciphertext=updated_main.pq_ciphertext,
-                pq_wrapped_secret=updated_main.pq_wrapped_secret,
-                pq_wrapped_secret_tag=updated_main.pq_wrapped_secret_tag,
-                volume_descriptors=final_descriptors,
-                common_meta={},
-            )
-
-            aad_main = b""
-
-            temp_file = tempfile.NamedTemporaryFile(delete=False)
-            temp_path = Path(temp_file.name)
-            try:
-                with out_path.open("rb") as src, temp_file:
-                    temp_file.write(header_bytes)
-                    src.seek(main_descriptor.payload_offset)
-                    remaining = main_cipher_len + TAG_LEN
-                    while remaining > 0:
-                        chunk = src.read(min(STREAM_CHUNK_SIZE, remaining))
-                        if not chunk:
-                            break
-                        temp_file.write(chunk)
-                        remaining -= len(chunk)
-
-                    temp_file.seek(0, os.SEEK_END)
-                    aad_decoy = aad_main
-                    with payload_source.path.open("rb") as payload_file:
-                        tag = _encrypt_stream(
-                            payload_file,
-                            temp_file,
-                            file_key,
-                            nonce,
-                            aad_decoy,
-                            initial=payload_header,
-                        )
-                        temp_file.write(tag)
-
-                temp_path.replace(out_path)
-            finally:
-                temp_path.unlink(missing_ok=True)
-        return
+        raise UnsupportedFeatureError(
+            "Adding a decoy volume requires rebuilding the container with encrypt_with_decoy to preserve header integrity",
+        )
 
     salt = os.urandom(16)
     nonce = os.urandom(12)
@@ -712,7 +509,7 @@ def encrypt_file(
             common_meta={},
         )
 
-        aad = b""
+        aad = header_bytes
 
         with payload_source.path.open("rb") as payload_file, out_path.open("xb") as f:
             f.write(header_bytes)
@@ -740,23 +537,222 @@ def encrypt_with_decoy(
         raise FileExistsError(f"Refusing to overwrite existing file: {out_path}")
 
     effective_mode = "pq-hybrid" if mode == "pq_hybrid" else mode
+    if effective_mode == "pq-hybrid" and not pq.available():
+        raise UnsupportedFeatureError("PQ-hybrid mode is not available (oqs not installed)")
 
-    encrypt_file(
-        main_path,
-        out_path,
-        main_password,
-        overwrite=overwrite,
-        mode=effective_mode,
-        volume="main",
-    )
-    encrypt_file(
-        decoy_path,
-        out_path,
-        decoy_password,
-        overwrite=False,
-        mode=effective_mode,
-        volume="decoy",
-    )
+    argon_params = recommended_params()
+
+    with _PayloadSource(main_path) as main_payload, _PayloadSource(decoy_path) as decoy_payload:
+        main_header = _build_payload_header(main_payload.meta)
+        decoy_header = _build_payload_header(decoy_payload.meta)
+
+        main_plain_len = len(main_header) + main_payload.path.stat().st_size
+        decoy_plain_len = len(decoy_header) + decoy_payload.path.stat().st_size
+
+        main_salt = os.urandom(16)
+        main_nonce = os.urandom(12)
+        main_file_key = os.urandom(32)
+
+        decoy_salt = os.urandom(16)
+        decoy_nonce = os.urandom(12)
+        decoy_file_key = os.urandom(32)
+
+        descriptors: list[VolumeDescriptor] = []
+
+        if effective_mode == "password":
+            main_provider = _PasswordOnlyProviderFactory(main_password, argon_params, main_salt).build()
+            main_wrapped = main_provider.wrap_file_key(main_file_key)
+            decoy_provider = _PasswordOnlyProviderFactory(decoy_password, argon_params, decoy_salt).build()
+            decoy_wrapped = decoy_provider.wrap_file_key(decoy_file_key)
+
+            descriptors.append(
+                VolumeDescriptor(
+                    volume_id=0,
+                    key_mode=KEY_MODE_PASSWORD_ONLY,
+                    flags=0,
+                    payload_offset=0,
+                    payload_length=main_plain_len,
+                    salt_argon2=main_salt,
+                    argon_mem_cost=argon_params.mem_cost_kib,
+                    argon_time_cost=argon_params.time_cost,
+                    argon_parallelism=argon_params.parallelism,
+                    nonce_aes_gcm=main_nonce,
+                    wrapped_key=main_wrapped.data,
+                    wrapped_key_tag=main_wrapped.tag,
+                    reserved=bytes(RESERVED_LEN),
+                )
+            )
+            descriptors.append(
+                VolumeDescriptor(
+                    volume_id=1,
+                    key_mode=KEY_MODE_PASSWORD_ONLY,
+                    flags=0,
+                    payload_offset=0,
+                    payload_length=decoy_plain_len,
+                    salt_argon2=decoy_salt,
+                    argon_mem_cost=argon_params.mem_cost_kib,
+                    argon_time_cost=argon_params.time_cost,
+                    argon_parallelism=argon_params.parallelism,
+                    nonce_aes_gcm=decoy_nonce,
+                    wrapped_key=decoy_wrapped.data,
+                    wrapped_key_tag=decoy_wrapped.tag,
+                    reserved=bytes(RESERVED_LEN),
+                )
+            )
+        else:
+            password_key_main = derive_key_from_password(
+                main_password,
+                main_salt,
+                mem_cost=argon_params.mem_cost_kib,
+                time_cost=argon_params.time_cost,
+                parallelism=argon_params.parallelism,
+            )
+            password_key_decoy = derive_key_from_password(
+                decoy_password,
+                decoy_salt,
+                mem_cost=argon_params.mem_cost_kib,
+                time_cost=argon_params.time_cost,
+                parallelism=argon_params.parallelism,
+            )
+
+            public_key, secret_key = pq.generate_kem_keypair()
+            kem_ciphertext, shared_secret = pq.encapsulate(public_key)
+
+            hkdf = HKDF(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=None,
+                info=b"zilant-pq-hybrid",
+            )
+            master_key = hkdf.derive(shared_secret + password_key_main)
+            decoy_master_key = hkdf.derive(shared_secret + password_key_decoy)
+
+            main_wrapped_key, main_wrapped_tag = AesGcmEncryptor.encrypt(
+                master_key, WRAP_NONCE, main_file_key, b"",
+            )
+            decoy_wrapped_key, decoy_wrapped_tag = AesGcmEncryptor.encrypt(
+                decoy_master_key, WRAP_NONCE, decoy_file_key, b"",
+            )
+            wrapped_secret, wrapped_secret_tag = AesGcmEncryptor.encrypt(password_key_main, WRAP_NONCE, secret_key, b"")
+            decoy_wrapped_secret, decoy_wrapped_secret_tag = AesGcmEncryptor.encrypt(
+                password_key_decoy, WRAP_NONCE, secret_key, b"",
+            )
+
+            descriptors.append(
+                VolumeDescriptor(
+                    volume_id=0,
+                    key_mode=KEY_MODE_PQ_HYBRID,
+                    flags=0,
+                    payload_offset=0,
+                    payload_length=main_plain_len,
+                    salt_argon2=main_salt,
+                    argon_mem_cost=argon_params.mem_cost_kib,
+                    argon_time_cost=argon_params.time_cost,
+                    argon_parallelism=argon_params.parallelism,
+                    nonce_aes_gcm=main_nonce,
+                    wrapped_key=main_wrapped_key,
+                    wrapped_key_tag=main_wrapped_tag,
+                    reserved=bytes(RESERVED_LEN),
+                    pq_ciphertext=kem_ciphertext,
+                    pq_wrapped_secret=wrapped_secret,
+                    pq_wrapped_secret_tag=wrapped_secret_tag,
+                )
+            )
+            descriptors.append(
+                VolumeDescriptor(
+                    volume_id=1,
+                    key_mode=KEY_MODE_PQ_HYBRID,
+                    flags=0,
+                    payload_offset=0,
+                    payload_length=decoy_plain_len,
+                    salt_argon2=decoy_salt,
+                    argon_mem_cost=argon_params.mem_cost_kib,
+                    argon_time_cost=argon_params.time_cost,
+                    argon_parallelism=argon_params.parallelism,
+                    nonce_aes_gcm=decoy_nonce,
+                    wrapped_key=decoy_wrapped_key,
+                    wrapped_key_tag=decoy_wrapped_tag,
+                    reserved=bytes(RESERVED_LEN),
+                    pq_ciphertext=kem_ciphertext,
+                    pq_wrapped_secret=decoy_wrapped_secret,
+                    pq_wrapped_secret_tag=decoy_wrapped_secret_tag,
+                )
+            )
+
+        temp_header = build_header(
+            key_mode=descriptors[0].key_mode,
+            header_flags=0,
+            salt_argon2=descriptors[0].salt_argon2,
+            argon_mem_cost=descriptors[0].argon_mem_cost,
+            argon_time_cost=descriptors[0].argon_time_cost,
+            argon_parallelism=descriptors[0].argon_parallelism,
+            nonce_aes_gcm=descriptors[0].nonce_aes_gcm,
+            wrapped_key=descriptors[0].wrapped_key,
+            wrapped_key_tag=descriptors[0].wrapped_key_tag,
+            reserved=descriptors[0].reserved,
+            version=VERSION_V3,
+            pq_ciphertext=descriptors[0].pq_ciphertext,
+            pq_wrapped_secret=descriptors[0].pq_wrapped_secret,
+            pq_wrapped_secret_tag=descriptors[0].pq_wrapped_secret_tag,
+            volume_descriptors=descriptors,
+            common_meta={},
+        )
+
+        header_len = len(temp_header)
+        descriptors = [
+            replace(
+                descriptors[0],
+                payload_offset=header_len,
+            ),
+            replace(
+                descriptors[1],
+                payload_offset=header_len + main_plain_len + TAG_LEN,
+            ),
+        ]
+
+        header_bytes = build_header(
+            key_mode=descriptors[0].key_mode,
+            header_flags=descriptors[0].flags,
+            salt_argon2=descriptors[0].salt_argon2,
+            argon_mem_cost=descriptors[0].argon_mem_cost,
+            argon_time_cost=descriptors[0].argon_time_cost,
+            argon_parallelism=descriptors[0].argon_parallelism,
+            nonce_aes_gcm=descriptors[0].nonce_aes_gcm,
+            wrapped_key=descriptors[0].wrapped_key,
+            wrapped_key_tag=descriptors[0].wrapped_key_tag,
+            reserved=descriptors[0].reserved,
+            version=VERSION_V3,
+            pq_ciphertext=descriptors[0].pq_ciphertext,
+            pq_wrapped_secret=descriptors[0].pq_wrapped_secret,
+            pq_wrapped_secret_tag=descriptors[0].pq_wrapped_secret_tag,
+            volume_descriptors=descriptors,
+            common_meta={},
+        )
+
+        aad = header_bytes
+        with out_path.open("xb") as dest:
+            dest.write(header_bytes)
+            with main_payload.path.open("rb") as payload_file:
+                tag = _encrypt_stream(
+                    payload_file,
+                    dest,
+                    main_file_key,
+                    descriptors[0].nonce_aes_gcm,
+                    aad,
+                    initial=main_header,
+                )
+                dest.write(tag)
+
+            with decoy_payload.path.open("rb") as payload_file:
+                tag = _encrypt_stream(
+                    payload_file,
+                    dest,
+                    decoy_file_key,
+                    descriptors[1].nonce_aes_gcm,
+                    aad,
+                    initial=decoy_header,
+                )
+                dest.write(tag)
 
 
 def decrypt_file(
@@ -781,7 +777,7 @@ def decrypt_file(
 
     with container_path.open("rb") as f:
         header, descriptors, header_bytes = read_header_from_stream(f)
-        aad = b""
+        aad = header_bytes
 
         target_volume = 0 if volume == "main" else 1
         descriptor = next((d for d in descriptors if d.volume_id == target_volume), None)
@@ -905,7 +901,7 @@ def decrypt_auto_volume(
 
     with container.open("rb") as f:
         header, descriptors, header_bytes = read_header_from_stream(f)
-        aad = b""
+        aad = header_bytes
 
         main_descriptor = next((d for d in descriptors if d.volume_id == 0), None)
         if main_descriptor is not None and any(d.key_mode != main_descriptor.key_mode for d in descriptors):

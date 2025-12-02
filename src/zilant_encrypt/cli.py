@@ -70,7 +70,7 @@ def _handle_action(
         console.print(message)
         return EXIT_CRYPTO
     except IntegrityError:
-        message = integrity_error_message or "[red]Container is corrupted or password is incorrect.[/red]"
+        message = integrity_error_message or "[red]Error: container is damaged or not supported.[/red]"
         console.print(message)
         return EXIT_CRYPTO
     except (ContainerFormatError, UnsupportedFeatureError) as exc:
