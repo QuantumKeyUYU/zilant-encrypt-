@@ -50,3 +50,9 @@ def recommended_params() -> Argon2Params:
     """Return recommended default Argon2id parameters."""
 
     return Argon2Params()
+
+
+# Named profile for the current release. Can be extended in the future
+# (e.g. "interactive", "moderate", "strong"), but keeping one fixed profile
+# for 0.1 simplifies compatibility.
+RecommendedArgon2Params = Argon2Params()
