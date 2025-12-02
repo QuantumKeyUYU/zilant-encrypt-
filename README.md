@@ -2,7 +2,8 @@
 
 Zilant Encrypt is a password-based container format (`.zil`) and CLI that uses AES-256-GCM
 and Argon2id. This 0.1 release focuses on a production-ready password-only mode while
-keeping space for future PQ/hybrid features.
+keeping space for future PQ/hybrid features. An experimental PQ-hybrid mode using
+Kyber768 is available when the optional `oqs` dependency is installed.
 
 ## Installation
 
@@ -48,16 +49,21 @@ Key flags:
 
 ## How the container is structured
 
-* A fixed 128-byte header containing magic/version, Argon2id parameters, nonce, and the
-  wrapped file key.
+* A fixed 128-byte header (v1, password-only) containing magic/version, Argon2id
+  parameters, nonce, and the wrapped file key.
+* Version 2 headers are variable length and include PQ-hybrid metadata: KEM ciphertext
+  and a password-wrapped KEM secret key (temporary storage strategy for this MVP).
 * Payload is encrypted with AES-256-GCM using a random file key; the file key is wrapped
-  with a password-derived key (Argon2id).
+  with a password-derived key (Argon2id) or with a hybrid master key (Argon2id + KEM
+  shared secret) in PQ mode.
 * Directory inputs are archived into a ZIP before encryption; on decrypt they are
   unpacked into the provided output path.
 
 ## Security notes
 
 * Password-only mode with AES-256-GCM and Argon2id.
+* Experimental PQ-hybrid mode (Argon2id + Kyber768 via `oqs`) derives a master key from
+  both the password-derived key and the KEM shared secret.
 * Default Argon2id profile: 64 MiB memory, time_cost=3, parallelism=1 – a balanced
   setting for interactive use while resisting brute force.
 * No post-quantum/hybrid keying or hidden volumes yet; these are planned for future
@@ -65,8 +71,9 @@ Key flags:
 
 ## Limitations in 0.1
 
-* Only password-based containers are supported.
-* No GUI and no PQ/hybrid wrapping yet.
+* PQ-hybrid requires the optional `oqs` dependency; without it the feature is disabled
+  and related tests are skipped.
+* PQ-hybrid compatibility is experimental and may change between releases.
 
 ## Running tests
 
