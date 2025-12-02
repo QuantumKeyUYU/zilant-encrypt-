@@ -63,7 +63,7 @@ def _human_size(num_bytes: int) -> str:
 
 
 def _pq_error() -> int:
-    console.print(f"[red]{PQ_ERROR_MESSAGE}[/red]")
+    console.print(PQ_ERROR_MESSAGE)
     return EXIT_PQ_UNSUPPORTED
 
 
