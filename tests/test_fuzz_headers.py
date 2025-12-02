@@ -5,22 +5,23 @@ from __future__ import annotations
 import io
 
 import pytest
-from hypothesis import given, strategies as st
 
+from hypothesis import given
+from hypothesis import strategies as st
 from zilant_encrypt.container.format import (
-    MAGIC,
-    MAX_HEADER_LEN,
-    PAYLOAD_TAG_LEN,
-    VERSION_V3,
-    KEY_MODE_PASSWORD_ONLY,
     _HEADER_STRUCT_V3_PREFIX,
     _VOLUME_DESCRIPTOR_STRUCT,
     _VOLUME_META_V3_PASSWORD_STRUCT,
-    SALT_LEN,
+    KEY_MODE_PASSWORD_ONLY,
+    MAGIC,
+    MAX_HEADER_LEN,
     NONCE_LEN,
+    PAYLOAD_TAG_LEN,
+    RESERVED_LEN,
+    SALT_LEN,
+    VERSION_V3,
     WRAPPED_KEY_MAX_LEN,
     WRAPPED_KEY_TAG_LEN,
-    RESERVED_LEN,
     parse_header,
     read_header_from_stream,
 )

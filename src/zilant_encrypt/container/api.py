@@ -23,30 +23,35 @@ from zilant_encrypt.container.core import (
     normalize_mode,
     resolve_argon_params,
 )
+from zilant_encrypt.container.format import RESERVED_LEN
 from zilant_encrypt.container.keymgmt import (
+    WRAP_NONCE,
     PasswordKeyProvider,
     WrappedKey,
-    WRAP_NONCE,
     _validate_argon_params,
     _validate_decrypt_argon_params,
     _zeroize,
 )
-from zilant_encrypt.crypto.aead import AesGcmEncryptor, TAG_LEN
-from zilant_encrypt.container.overview import ContainerOverview, _ciphertext_length_for_descriptor, _load_overview, _select_descriptors
-from zilant_encrypt.container.format import RESERVED_LEN
+from zilant_encrypt.container.overview import (
+    ContainerOverview,
+    _ciphertext_length_for_descriptor,
+    _load_overview,
+    _select_descriptors,
+)
 from zilant_encrypt.container.payload import (
     MAX_PAYLOAD_META_LEN,
     PAYLOAD_MAGIC,
     PAYLOAD_META_LEN_SIZE,
     PAYLOAD_VERSION,
     STREAM_CHUNK_SIZE,
-    _NullWriter,
-    _PayloadSource,
-    _PayloadWriter,
     _build_payload_header,
     _decrypt_stream,
     _encrypt_stream,
+    _NullWriter,
+    _PayloadSource,
+    _PayloadWriter,
 )
+from zilant_encrypt.crypto.aead import TAG_LEN, AesGcmEncryptor
 
 __all__ = [
     "ARGON_MEM_MAX_KIB",

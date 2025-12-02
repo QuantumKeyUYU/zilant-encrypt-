@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import pytest
-
 from zilant_encrypt import __version__
 from zilant_encrypt.container import (
     ARGON_MEM_MAX_KIB,

@@ -5,12 +5,12 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from zilant_encrypt.container.api import WRAP_NONCE, PasswordKeyProvider, build_volume_descriptor
 from zilant_encrypt.container.format import (
+    KEY_MODE_PASSWORD_ONLY,
+    KEY_MODE_PQ_HYBRID,
     PQ_PLACEHOLDER_CIPHERTEXT_LEN,
     PQ_PLACEHOLDER_SECRET_LEN,
     RESERVED_LEN,
     WRAPPED_KEY_TAG_LEN,
-    KEY_MODE_PASSWORD_ONLY,
-    KEY_MODE_PQ_HYBRID,
     VolumeDescriptor,
 )
 from zilant_encrypt.crypto import pq

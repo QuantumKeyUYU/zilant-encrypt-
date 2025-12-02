@@ -26,8 +26,12 @@ from zilant_encrypt.container.core import (
     normalize_mode,
     resolve_argon_params,
 )
-from zilant_encrypt.container.format import KEY_MODE_PASSWORD_ONLY, KEY_MODE_PQ_HYBRID, read_header_from_stream
-from zilant_encrypt.container.keymgmt import PasswordKeyProvider, WrappedKey, WRAP_NONCE
+from zilant_encrypt.container.format import (
+    KEY_MODE_PASSWORD_ONLY,
+    KEY_MODE_PQ_HYBRID,
+    read_header_from_stream,
+)
+from zilant_encrypt.container.keymgmt import WRAP_NONCE, PasswordKeyProvider, WrappedKey
 from zilant_encrypt.container.payload import (
     MAX_PAYLOAD_META_LEN,
     PAYLOAD_MAGIC,

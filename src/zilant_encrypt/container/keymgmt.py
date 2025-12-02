@@ -2,14 +2,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal
 
 from cryptography.exceptions import InvalidTag
 
+from zilant_encrypt.crypto import pq
 from zilant_encrypt.crypto.aead import AesGcmEncryptor
 from zilant_encrypt.crypto.kdf import Argon2Params, derive_key_from_password, recommended_params
-from zilant_encrypt.errors import ContainerFormatError, InvalidPassword, PqSupportError, UnsupportedFeatureError
-from zilant_encrypt.crypto import pq
+from zilant_encrypt.errors import (
+    ContainerFormatError,
+    InvalidPassword,
+    PqSupportError,
+    UnsupportedFeatureError,
+)
 
 WRAP_NONCE = b"\x00" * 12
 ARGON_MEM_MIN_KIB = 32 * 1024
@@ -35,7 +40,8 @@ class PasswordKeyProvider:
         self.params = params
         self._password_key: bytearray | None = None
 
-    def _ensure_key(self) -> bytes:
+    def _ensure_key(self) -> bytearray:
+        """Derive key if missing and return mutable reference for zeroization."""
         if self._password_key is None:
             self._password_key = bytearray(
                 derive_key_from_password(
@@ -55,7 +61,8 @@ class PasswordKeyProvider:
     def wrap_file_key(self, file_key: bytes) -> WrappedKey:
         key = self._ensure_key()
         try:
-            ciphertext, tag = AesGcmEncryptor.encrypt(key, WRAP_NONCE, file_key, b"")
+            # Cast to bytes because AESGCM expects immutable bytes
+            ciphertext, tag = AesGcmEncryptor.encrypt(bytes(key), WRAP_NONCE, file_key, b"")
             return WrappedKey(data=ciphertext, tag=tag)
         finally:
             self._clear_key()
@@ -63,7 +70,8 @@ class PasswordKeyProvider:
     def unwrap_file_key(self, wrapped: WrappedKey) -> bytes:
         key = self._ensure_key()
         try:
-            return AesGcmEncryptor.decrypt(key, WRAP_NONCE, wrapped.data, wrapped.tag, b"")
+            # Cast to bytes because AESGCM expects immutable bytes
+            return AesGcmEncryptor.decrypt(bytes(key), WRAP_NONCE, wrapped.data, wrapped.tag, b"")
         except InvalidTag as exc:
             raise InvalidPassword("Unable to unwrap file key") from exc
         finally:

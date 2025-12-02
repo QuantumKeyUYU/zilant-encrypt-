@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import Callable
 
+
 @dataclass
 class _Strategy:
     generator: Callable[[], object]

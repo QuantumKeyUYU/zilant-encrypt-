@@ -49,12 +49,12 @@ from zilant_encrypt.container.overview import (
 )
 from zilant_encrypt.container.payload import (
     PayloadMeta,
-    _NullWriter,
-    _PayloadSource,
-    _PayloadWriter,
     _build_payload_header,
     _decrypt_stream,
     _encrypt_stream,
+    _NullWriter,
+    _PayloadSource,
+    _PayloadWriter,
 )
 from zilant_encrypt.crypto import pq
 from zilant_encrypt.crypto.aead import TAG_LEN, AesGcmEncryptor
@@ -141,6 +141,7 @@ def _decrypt_volume(
         ):
             raise ContainerFormatError("PQ header missing required fields")
 
+        # Derive password key as mutable bytearray for zeroization
         password_key = bytearray(
             derive_key_from_password(
                 password,
@@ -152,13 +153,14 @@ def _decrypt_volume(
         )
         try:
             kem_secret = AesGcmEncryptor.decrypt(
-                password_key,
+                bytes(password_key),  # cast to bytes for library call
                 WRAP_NONCE,
                 descriptor.pq_wrapped_secret,
                 descriptor.pq_wrapped_secret_tag,
                 b"",
             )
         except InvalidTag as exc:
+            _zeroize(password_key)
             raise InvalidPassword("Unable to unwrap KEM secret key") from exc
 
         shared_secret = pq.decapsulate(descriptor.pq_ciphertext, kem_secret)
@@ -168,10 +170,13 @@ def _decrypt_volume(
             salt=descriptor.salt_argon2,
             info=b"zilant-pq-hybrid",
         )
-        master_key = hkdf.derive(shared_secret + password_key)
+
+        # Convert derived master key to mutable bytearray immediately for zeroization
+        master_key = bytearray(hkdf.derive(shared_secret + password_key))
+
         try:
             return AesGcmEncryptor.decrypt(
-                master_key,
+                bytes(master_key),  # cast to bytes for library call
                 WRAP_NONCE,
                 descriptor.wrapped_key,
                 descriptor.wrapped_key_tag,
@@ -181,7 +186,7 @@ def _decrypt_volume(
             raise InvalidPassword("Unable to unwrap file key") from exc
         finally:
             _zeroize(password_key)
-            _zeroize(bytearray(master_key))
+            _zeroize(master_key)
 
     raise UnsupportedFeatureError("Unsupported key mode")
 
@@ -255,13 +260,26 @@ def build_volume_descriptor(
             salt=salt,
             info=b"zilant-pq-hybrid",
         )
-        master_key = hkdf.derive(shared_secret + password_key)
 
-        wrapped_key_data, wrapped_key_tag = AesGcmEncryptor.encrypt(master_key, WRAP_NONCE, file_key, b"")
-        wrapped_secret, wrapped_secret_tag = AesGcmEncryptor.encrypt(password_key, WRAP_NONCE, secret_key, b"")
+        # Store as mutable bytearray for subsequent zeroization
+        master_key = bytearray(hkdf.derive(shared_secret + password_key))
 
-        _zeroize(password_key)
-        _zeroize(bytearray(master_key))
+        try:
+            wrapped_key_data, wrapped_key_tag = AesGcmEncryptor.encrypt(
+                bytes(master_key),  # cast to bytes
+                WRAP_NONCE,
+                file_key,
+                b""
+            )
+            wrapped_secret, wrapped_secret_tag = AesGcmEncryptor.encrypt(
+                bytes(password_key),  # cast to bytes
+                WRAP_NONCE,
+                secret_key,
+                b""
+            )
+        finally:
+            _zeroize(password_key)
+            _zeroize(master_key)
 
         return VolumeDescriptor(
             volume_index=volume_index,

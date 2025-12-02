@@ -1,6 +1,6 @@
 import pytest
 
-from zilant_encrypt.container.api import build_volume_descriptor, _decrypt_volume
+from zilant_encrypt.container.api import _decrypt_volume, build_volume_descriptor
 from zilant_encrypt.container.format import KEY_MODE_PQ_HYBRID
 from zilant_encrypt.crypto import pq
 from zilant_encrypt.crypto.kdf import Argon2Params

@@ -3,7 +3,11 @@ import os
 import pytest
 
 from zilant_encrypt.container import api
-from zilant_encrypt.container.format import KEY_MODE_PASSWORD_ONLY, VolumeDescriptor, read_header_from_stream
+from zilant_encrypt.container.format import (
+    KEY_MODE_PASSWORD_ONLY,
+    VolumeDescriptor,
+    read_header_from_stream,
+)
 from zilant_encrypt.crypto.kdf import Argon2Params
 from zilant_encrypt.errors import ContainerFormatError, InvalidPassword
 

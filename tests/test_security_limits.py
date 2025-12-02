@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from zilant_encrypt.container import api, format as fmt
+from zilant_encrypt.container import api
+from zilant_encrypt.container import format as fmt
 from zilant_encrypt.errors import ContainerFormatError
 
 
