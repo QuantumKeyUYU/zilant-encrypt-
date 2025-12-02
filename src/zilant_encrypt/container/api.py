@@ -20,8 +20,11 @@ from zilant_encrypt.container.format import (
     HEADER_V1_LEN,
     KEY_MODE_PASSWORD_ONLY,
     KEY_MODE_PQ_HYBRID,
+    RESERVED_LEN,
     VERSION_PQ_HYBRID,
     VERSION_V1,
+    VERSION_V3,
+    VolumeDescriptor,
     build_header,
     header_aad,
     read_header_from_stream,
@@ -359,9 +362,12 @@ def encrypt_file(
     if mode == "password":
         provider = _PasswordOnlyProviderFactory(password, argon_params, salt).build()
         wrapped_key = provider.wrap_file_key(file_key)
-        header_bytes = build_header(
+        descriptor = VolumeDescriptor(
+            volume_id=0,
             key_mode=KEY_MODE_PASSWORD_ONLY,
-            header_flags=0,
+            flags=0,
+            payload_offset=0,
+            payload_length=0,
             salt_argon2=salt,
             argon_mem_cost=argon_params.mem_cost_kib,
             argon_time_cost=argon_params.time_cost,
@@ -369,7 +375,7 @@ def encrypt_file(
             nonce_aes_gcm=nonce,
             wrapped_key=wrapped_key.data,
             wrapped_key_tag=wrapped_key.tag,
-            version=VERSION_V1,
+            reserved=bytes(RESERVED_LEN),
         )
     elif mode == "pq-hybrid":
         if not pq.available():
@@ -395,9 +401,12 @@ def encrypt_file(
         wrapped_key_data, wrapped_key_tag = AesGcmEncryptor.encrypt(master_key, WRAP_NONCE, file_key, b"")
         wrapped_secret, wrapped_secret_tag = AesGcmEncryptor.encrypt(password_key, WRAP_NONCE, secret_key, b"")
 
-        header_bytes = build_header(
+        descriptor = VolumeDescriptor(
+            volume_id=0,
             key_mode=KEY_MODE_PQ_HYBRID,
-            header_flags=0,
+            flags=0,
+            payload_offset=0,
+            payload_length=0,
             salt_argon2=salt,
             argon_mem_cost=argon_params.mem_cost_kib,
             argon_time_cost=argon_params.time_cost,
@@ -405,13 +414,32 @@ def encrypt_file(
             nonce_aes_gcm=nonce,
             wrapped_key=wrapped_key_data,
             wrapped_key_tag=wrapped_key_tag,
-            version=VERSION_PQ_HYBRID,
+            reserved=bytes(RESERVED_LEN),
             pq_ciphertext=kem_ciphertext,
             pq_wrapped_secret=wrapped_secret,
             pq_wrapped_secret_tag=wrapped_secret_tag,
         )
     else:
         raise UnsupportedFeatureError(f"Unknown encryption mode: {mode}")
+
+    header_bytes = build_header(
+        key_mode=descriptor.key_mode,
+        header_flags=descriptor.flags,
+        salt_argon2=descriptor.salt_argon2,
+        argon_mem_cost=descriptor.argon_mem_cost,
+        argon_time_cost=descriptor.argon_time_cost,
+        argon_parallelism=descriptor.argon_parallelism,
+        nonce_aes_gcm=descriptor.nonce_aes_gcm,
+        wrapped_key=descriptor.wrapped_key,
+        wrapped_key_tag=descriptor.wrapped_key_tag,
+        reserved=descriptor.reserved,
+        version=VERSION_V3,
+        pq_ciphertext=descriptor.pq_ciphertext,
+        pq_wrapped_secret=descriptor.pq_wrapped_secret,
+        pq_wrapped_secret_tag=descriptor.pq_wrapped_secret_tag,
+        volume_descriptors=[descriptor],
+        common_meta={},
+    )
 
     aad = header_aad(header_bytes)
 
@@ -443,7 +471,7 @@ def decrypt_file(
     _ensure_output(out_path, overwrite)
 
     with container_path.open("rb") as f:
-        header, header_bytes = read_header_from_stream(f)
+        header, descriptors, header_bytes = read_header_from_stream(f)
         aad = header_aad(header_bytes)
 
         ciphertext_len = file_size - header.header_len - TAG_LEN
@@ -457,12 +485,13 @@ def decrypt_file(
         )
 
         effective_mode = mode or ("pq-hybrid" if header.key_mode == KEY_MODE_PQ_HYBRID else "password")
+        active_volume = descriptors[0]
         if header.key_mode == KEY_MODE_PASSWORD_ONLY:
             if effective_mode != "password":
                 raise UnsupportedFeatureError("Container is password-only but PQ mode requested")
-            provider = PasswordKeyProvider(password, header.salt_argon2, decrypt_params)
+            provider = PasswordKeyProvider(password, active_volume.salt_argon2, decrypt_params)
             file_key = provider.unwrap_file_key(
-                WrappedKey(data=header.wrapped_file_key, tag=header.wrapped_key_tag),
+                WrappedKey(data=active_volume.wrapped_key, tag=active_volume.wrapped_key_tag),
             )
         elif header.key_mode == KEY_MODE_PQ_HYBRID:
             if effective_mode != "pq-hybrid":
@@ -471,25 +500,29 @@ def decrypt_file(
                 raise UnsupportedFeatureError("PQ-hybrid containers require oqs support")
             password_key = derive_key_from_password(
                 password,
-                header.salt_argon2,
+                active_volume.salt_argon2,
                 mem_cost=decrypt_params.mem_cost_kib,
                 time_cost=decrypt_params.time_cost,
                 parallelism=decrypt_params.parallelism,
             )
-            if header.pq_wrapped_secret is None or header.pq_ciphertext is None or header.pq_wrapped_secret_tag is None:
+            if (
+                active_volume.pq_wrapped_secret is None
+                or active_volume.pq_ciphertext is None
+                or active_volume.pq_wrapped_secret_tag is None
+            ):
                 raise ContainerFormatError("PQ header missing required fields")
             try:
                 kem_secret = AesGcmEncryptor.decrypt(
                     password_key,
                     WRAP_NONCE,
-                    header.pq_wrapped_secret,
-                    header.pq_wrapped_secret_tag,
+                    active_volume.pq_wrapped_secret,
+                    active_volume.pq_wrapped_secret_tag,
                     b"",
                 )
             except InvalidTag as exc:
                 raise InvalidPassword("Unable to unwrap KEM secret key") from exc
 
-            shared_secret = pq.decapsulate(header.pq_ciphertext, kem_secret)
+            shared_secret = pq.decapsulate(active_volume.pq_ciphertext, kem_secret)
             hkdf = HKDF(
                 algorithm=hashes.SHA256(),
                 length=32,
@@ -501,8 +534,8 @@ def decrypt_file(
                 file_key = AesGcmEncryptor.decrypt(
                     master_key,
                     WRAP_NONCE,
-                    header.wrapped_file_key,
-                    header.wrapped_key_tag,
+                    active_volume.wrapped_key,
+                    active_volume.wrapped_key_tag,
                     b"",
                 )
             except InvalidTag as exc:
@@ -515,7 +548,7 @@ def decrypt_file(
             f,
             writer,
             file_key,
-            header.nonce_aes_gcm,
+            active_volume.nonce_aes_gcm,
             aad,
             ciphertext_len,
         )

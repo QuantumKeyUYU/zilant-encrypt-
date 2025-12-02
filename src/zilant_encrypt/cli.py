@@ -13,7 +13,12 @@ from rich.table import Table
 
 from zilant_encrypt import __version__
 from zilant_encrypt.container import api
-from zilant_encrypt.container.format import HEADER_V1_LEN, KEY_MODE_PASSWORD_ONLY, KEY_MODE_PQ_HYBRID, read_header_from_stream
+from zilant_encrypt.container.format import (
+    HEADER_V1_LEN,
+    KEY_MODE_PASSWORD_ONLY,
+    KEY_MODE_PQ_HYBRID,
+    read_header_from_stream,
+)
 from zilant_encrypt.crypto import pq
 from zilant_encrypt.errors import (
     ContainerFormatError,
@@ -190,7 +195,7 @@ def info(ctx: click.Context, container: Path) -> None:
     header_bytes = data[:HEADER_V1_LEN]
     try:
         with container.open("rb") as f:
-            header, header_bytes = read_header_from_stream(f)
+            header, _descriptors, header_bytes = read_header_from_stream(f)
     except (ContainerFormatError, UnsupportedFeatureError) as exc:
         console.print(f"[red]Unsupported or invalid container:[/red] {exc}")
         ctx.exit(EXIT_CRYPTO)

@@ -33,7 +33,7 @@ def test_build_and_parse_header() -> None:
     # длина фиксированная
     assert len(header_bytes) == HEADER_LEN
 
-    parsed = parse_header(header_bytes)
+    parsed, descriptors = parse_header(header_bytes)
 
     # базовые поля должны совпасть с тем, что передавали в build_header
     assert parsed.salt_argon2 == b"\x01" * 16
@@ -41,6 +41,7 @@ def test_build_and_parse_header() -> None:
     assert parsed.nonce_aes_gcm == b"\x02" * 12
     assert parsed.wrapped_file_key == b"\x03" * 32
     assert parsed.wrapped_key_tag == b"\x04" * 16
+    assert len(descriptors) == 1
 
 
 def test_invalid_magic() -> None:
