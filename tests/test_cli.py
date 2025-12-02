@@ -61,6 +61,50 @@ def test_cli_decrypt_random_file(tmp_path: Path) -> None:
     assert result.exit_code == EXIT_CRYPTO
 
 
+def test_cli_encrypt_decrypt_decoy(tmp_path: Path) -> None:
+    runner = CliRunner()
+    main_src = tmp_path / "main.txt"
+    decoy_src = tmp_path / "decoy.txt"
+    main_src.write_text("MAIN")
+    decoy_src.write_text("DECOY")
+
+    container = tmp_path / "double.zil"
+
+    result = runner.invoke(cli, ["encrypt", str(main_src), str(container), "--password", "pw-main"])
+    assert result.exit_code == EXIT_SUCCESS
+
+    result = runner.invoke(
+        cli,
+        [
+            "encrypt",
+            str(decoy_src),
+            str(container),
+            "--password",
+            "pw-decoy",
+            "--volume",
+            "decoy",
+        ],
+    )
+    assert result.exit_code == EXIT_SUCCESS
+
+    main_out = tmp_path / "main_out.txt"
+    decoy_out = tmp_path / "decoy_out.txt"
+
+    result = runner.invoke(
+        cli,
+        ["decrypt", str(container), str(main_out), "--password", "pw-main", "--volume", "main"],
+    )
+    assert result.exit_code == EXIT_SUCCESS
+    assert main_out.read_text() == "MAIN"
+
+    result = runner.invoke(
+        cli,
+        ["decrypt", str(container), str(decoy_out), "--password", "pw-decoy", "--volume", "decoy"],
+    )
+    assert result.exit_code == EXIT_SUCCESS
+    assert decoy_out.read_text() == "DECOY"
+
+
 def test_cli_pq_mode_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     source = tmp_path / "source.txt"
