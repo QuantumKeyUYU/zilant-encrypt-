@@ -73,10 +73,10 @@ def _normalized_mode(mode_opt: str | None, *, default_to_password: bool = False)
     return normalize_mode(mode_opt)
 
 
-def _volume_selector(volume_id: int) -> Literal["main", "decoy", "all"]:
-    if volume_id == 0:
+def _volume_selector(volume_index: int) -> Literal["main", "decoy", "all"]:
+    if volume_index == 0:
         return "main"
-    if volume_id == 1:
+    if volume_index == 1:
         return "decoy"
     return "all"
 
@@ -94,12 +94,12 @@ def _password_match_summary(validated: set[int]) -> str:
     return ", ".join(_volume_label(v) for v in labels)
 
 
-def _volume_label(volume_id: int) -> str:
-    if volume_id == 0:
+def _volume_label(volume_index: int) -> str:
+    if volume_index == 0:
         return "main"
-    if volume_id == 1:
+    if volume_index == 1:
         return "decoy"
-    return f"id={volume_id}"
+    return f"id={volume_index}"
 
 
 def _mode_label(key_mode: int, pq_available: bool) -> str:
@@ -319,7 +319,7 @@ def encrypt(
                 password,
                 overwrite=overwrite,
                 mode=normalized_mode,
-                volume=cast(Literal["main", "decoy"], volume),
+                volume_selector=cast(Literal["main", "decoy"], volume),
                 argon_params=argon_params,
             ),
         )
@@ -411,7 +411,7 @@ def decrypt(
                 password,
                 overwrite=overwrite,
                 mode=dec_mode,
-                volume=dec_volume,
+                volume_selector=dec_volume,
             ),
         )
     if code == EXIT_SUCCESS:
@@ -453,10 +453,10 @@ def info(ctx: click.Context, container: Path, password_opt: str | None, show_vol
     password_summary: str | None = None
     if password is not None:
         for candidate in overview.descriptors:
-            check_vol = _volume_selector(candidate.volume_id)
+            check_vol = _volume_selector(candidate.volume_index)
             try:
                 _checked, ids = api.check_container(
-                    container, password=password, volume=check_vol
+                    container, password=password, volume_selector=check_vol
                 )
                 validated.update(ids)
             except InvalidPassword:
@@ -475,7 +475,7 @@ def info(ctx: click.Context, container: Path, password_opt: str | None, show_vol
         password_summary = _password_match_summary(validated)
 
     # Use 'layout' instead of 'l'
-    ordered_layouts = sorted(overview.layouts, key=lambda layout: layout.descriptor.volume_id)
+    ordered_layouts = sorted(overview.layouts, key=lambda layout: layout.descriptor.volume_index)
     primary_layout = ordered_layouts[0]
     selected = primary_layout.descriptor
 
@@ -512,15 +512,15 @@ def info(ctx: click.Context, container: Path, password_opt: str | None, show_vol
                 pq_info = ""
                 if desc.pq_ciphertext is not None and desc.pq_wrapped_secret is not None:
                     pq_info = f", pq-fields: ct={len(desc.pq_ciphertext)}B, sk={len(desc.pq_wrapped_secret)}B"
-                status = "authenticated" if desc.volume_id in validated else "locked"
+                status = "authenticated" if desc.volume_index in validated else "locked"
                 console.print(
                     "  - "
-                    + f"volume {_volume_label(desc.volume_id)} ({status})"
+                    + f"volume {_volume_label(desc.volume_index)} ({status})"
                     + f" (key_mode={_mode_label(desc.key_mode, overview.pq_available)}, size≈{_human_size(layout.ciphertext_len)}, "
                     + f"argon2: mem={desc.argon_mem_cost} KiB, time={desc.argon_time_cost}, p={desc.argon_parallelism}{pq_info})",
                 )
         else:
-            primary_label = _volume_label(primary_layout.descriptor.volume_id)
+            primary_label = _volume_label(primary_layout.descriptor.volume_index)
             console.print(
                 "  - "
                 + f"volume {primary_label} (locked)"
@@ -581,10 +581,10 @@ def check(
 
     def _run() -> None:
         overview, validated = api.check_container(
-            container, password=password, mode=check_mode, volume=check_volume
+            container, password=password, mode=check_mode, volume_selector=check_volume
         )
         # Use 'layout' instead of 'l'
-        ordered_layouts = sorted(overview.layouts, key=lambda layout: layout.descriptor.volume_id)
+        ordered_layouts = sorted(overview.layouts, key=lambda layout: layout.descriptor.volume_index)
         primary = ordered_layouts[0]
         table = Table(show_header=False, box=None)
         table.add_row("Magic/Version", f"ZILENC / {overview.header.version}")
@@ -609,7 +609,7 @@ def check(
                     pq_info = f", pq-fields: ct={len(desc.pq_ciphertext)}B, sk={len(desc.pq_wrapped_secret)}B"
                 console.print(
                     "  - "
-                    + f"volume {_volume_label(desc.volume_id)}"
+                    + f"volume {_volume_label(desc.volume_index)}"
                     + f" (key_mode={_mode_label(desc.key_mode, overview.pq_available)}, size≈{_human_size(layout.ciphertext_len)}, "
                     + f"argon2: mem={desc.argon_mem_cost} KiB, time={desc.argon_time_cost}, p={desc.argon_parallelism}{pq_info})",
                 )
