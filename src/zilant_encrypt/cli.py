@@ -13,13 +13,7 @@ from rich.table import Table
 
 from zilant_encrypt import __version__
 from zilant_encrypt.container import api
-from zilant_encrypt.container.format import (
-    HEADER_V1_LEN,
-    KEY_MODE_PASSWORD_ONLY,
-    KEY_MODE_PQ_HYBRID,
-    read_header_from_stream,
-)
-from zilant_encrypt.crypto.aead import TAG_LEN
+from zilant_encrypt.container.format import KEY_MODE_PASSWORD_ONLY, KEY_MODE_PQ_HYBRID
 from zilant_encrypt.crypto import pq
 from zilant_encrypt.errors import (
     ContainerFormatError,
@@ -58,6 +52,23 @@ def _human_size(num: int) -> str:
             return f"{num:.1f} {unit}" if unit != "B" else f"{num} {unit}"
         num /= 1024
     return f"{num:.1f} TB"
+
+
+def _volume_label(volume_id: int) -> str:
+    if volume_id == 0:
+        return "main"
+    if volume_id == 1:
+        return "decoy"
+    return f"id={volume_id}"
+
+
+def _mode_label(key_mode: int, pq_available: bool) -> str:
+    pq_status = "pq available" if pq_available else "pq unavailable"
+    if key_mode == KEY_MODE_PQ_HYBRID:
+        return f"pq-hybrid (Kyber768 + AES-GCM, {pq_status})"
+    if key_mode == KEY_MODE_PASSWORD_ONLY:
+        return "password-only"
+    return f"unknown ({key_mode})"
 
 
 def _handle_action(
@@ -297,67 +308,136 @@ def decrypt(
 @click.pass_context
 def info(ctx: click.Context, container: Path, show_volumes: bool) -> None:
     try:
-        data = container.read_bytes()
-    except OSError as exc:  # noqa: BLE001
-        console.print(f"[red]Unable to read container:[/red] {exc}")
-        ctx.exit(EXIT_FS)
-        return
-
-    header_bytes = data[:HEADER_V1_LEN]
-    try:
-        with container.open("rb") as f:
-            header, descriptors, header_bytes = read_header_from_stream(f)
+        overview, _validated = api.check_container(container, password=None)
     except (ContainerFormatError, UnsupportedFeatureError) as exc:
         console.print(f"[red]Unsupported or invalid container:[/red] {exc}")
         ctx.exit(EXIT_CRYPTO)
         return
+    except FileNotFoundError as exc:
+        console.print(f"[red]File not found:[/red] {exc}")
+        ctx.exit(EXIT_FS)
+        return
 
-    ordered = sorted(descriptors, key=lambda d: d.volume_id)
-    selected = ordered[0]
-    payload_size = selected.payload_length if selected.payload_length else max(
-        len(data) - selected.payload_offset - TAG_LEN, 0
-    )
+    ordered_layouts = sorted(overview.layouts, key=lambda l: l.descriptor.volume_id)
+    primary_layout = ordered_layouts[0]
+    selected = primary_layout.descriptor
     table = Table(show_header=False, box=None)
-    table.add_row("Magic/Version", f"ZILENC / {header.version}")
-    table.add_row("Volume", f"id={selected.volume_id}")
-    if selected.key_mode == KEY_MODE_PQ_HYBRID:
-        mode_label = "pq-hybrid (Kyber768 + AES-GCM)"
-    elif selected.key_mode == KEY_MODE_PASSWORD_ONLY:
-        mode_label = "password-only"
-    else:
-        mode_label = f"unknown ({selected.key_mode})"
-    table.add_row("Key mode", mode_label)
+    table.add_row("Magic/Version", f"ZILENC / {overview.header.version}")
+    table.add_row("Volumes", str(len(overview.descriptors)))
+    table.add_row("Volume", _volume_label(selected.volume_id))
+    table.add_row("Key mode", _mode_label(selected.key_mode, overview.pq_available))
     table.add_row(
         "Argon2id",
         f"mem={selected.argon_mem_cost} KiB, time={selected.argon_time_cost}, p={selected.argon_parallelism}",
     )
-    table.add_row("Payload size", f"~{_human_size(payload_size)}")
+    table.add_row("Payload size", f"~{_human_size(primary_layout.ciphertext_len)}")
+    table.add_row("PQ support", "available" if overview.pq_available else "unavailable")
 
     console.print("[bold]Zilant container[/bold]")
     console.print(table)
 
     if show_volumes:
         console.print("Volumes (verbose):")
-        for desc in ordered:
-            size = desc.payload_length if desc.payload_length else max(
-                len(data) - desc.payload_offset - TAG_LEN, 0
-            )
-            if desc.key_mode == KEY_MODE_PQ_HYBRID:
-                mode_label = "pq-hybrid (Kyber768 + AES-GCM)"
-            elif desc.key_mode == KEY_MODE_PASSWORD_ONLY:
-                mode_label = "password-only"
-            else:
-                mode_label = f"unknown ({desc.key_mode})"
+        for layout in ordered_layouts:
+            desc = layout.descriptor
             pq_info = ""
             if desc.pq_ciphertext is not None and desc.pq_wrapped_secret is not None:
                 pq_info = f", pq-fields: ct={len(desc.pq_ciphertext)}B, sk={len(desc.pq_wrapped_secret)}B"
             console.print(
                 "  - "
-                + f"volume {desc.volume_id}"
-                + f" (key_mode={mode_label}, size≈{_human_size(size)}, "
+                + f"volume {_volume_label(desc.volume_id)}"
+                + f" (key_mode={_mode_label(desc.key_mode, overview.pq_available)}, size≈{_human_size(layout.ciphertext_len)}, "
                 + f"argon2: mem={desc.argon_mem_cost} KiB, time={desc.argon_time_cost}, p={desc.argon_parallelism}{pq_info})",
             )
     ctx.exit(EXIT_SUCCESS)
+
+
+@cli.command(
+    help="Validate container structure and optional integrity without writing files.",
+    epilog="Example:\n  zilenc check secret.zil --password pw --volume main",
+)
+@click.argument("container", type=click.Path(path_type=Path))
+@click.option("--password", "password_opt", help="Password for integrity verification (prompts if omitted).")
+@click.option(
+    "--mode",
+    type=click.Choice(["password", "pq-hybrid"], case_sensitive=False),
+    default=None,
+    show_default=False,
+    help="Force a key mode for authentication (auto by default).",
+)
+@click.option(
+    "--volume",
+    type=click.Choice(["main", "decoy", "all"], case_sensitive=False),
+    default="all",
+    show_default=True,
+    help="Which volume(s) to validate.",
+)
+@click.option(
+    "--verbose/--quiet",
+    "verbose",
+    default=False,
+    help="Show detailed per-volume information.",
+)
+@click.pass_context
+def check(
+    ctx: click.Context,
+    container: Path,
+    password_opt: str | None,
+    mode: str | None,
+    volume: str,
+    verbose: bool,
+) -> None:
+    perform_auth = password_opt is not None or mode is not None or volume != "all"
+    password = _prompt_password(password_opt) if perform_auth else None
+
+    def _run() -> None:
+        overview, validated = api.check_container(container, password=password, mode=mode, volume=volume)
+        ordered_layouts = sorted(overview.layouts, key=lambda l: l.descriptor.volume_id)
+        primary = ordered_layouts[0]
+        table = Table(show_header=False, box=None)
+        table.add_row("Magic/Version", f"ZILENC / {overview.header.version}")
+        table.add_row("Volumes", str(len(overview.descriptors)))
+        table.add_row("Key mode", _mode_label(primary.descriptor.key_mode, overview.pq_available))
+        table.add_row(
+            "Argon2id",
+            f"mem={primary.descriptor.argon_mem_cost} KiB, time={primary.descriptor.argon_time_cost}, p={primary.descriptor.argon_parallelism}",
+        )
+        table.add_row("Payload size", f"~{_human_size(primary.ciphertext_len)}")
+        table.add_row("PQ support", "available" if overview.pq_available else "unavailable")
+        table.add_row("Validated", ", ".join(_volume_label(v) for v in validated) if validated else "(structural only)")
+
+        console.print("[bold]Container check[/bold]")
+        console.print(table)
+        if verbose:
+            console.print("Volumes (verbose):")
+            for layout in ordered_layouts:
+                desc = layout.descriptor
+                pq_info = ""
+                if desc.pq_ciphertext is not None and desc.pq_wrapped_secret is not None:
+                    pq_info = f", pq-fields: ct={len(desc.pq_ciphertext)}B, sk={len(desc.pq_wrapped_secret)}B"
+                console.print(
+                    "  - "
+                    + f"volume {_volume_label(desc.volume_id)}"
+                    + f" (key_mode={_mode_label(desc.key_mode, overview.pq_available)}, size≈{_human_size(layout.ciphertext_len)}, "
+                    + f"argon2: mem={desc.argon_mem_cost} KiB, time={desc.argon_time_cost}, p={desc.argon_parallelism}{pq_info})",
+                )
+
+        if not validated:
+            console.print("[yellow]Cryptographic tag verification skipped (no password supplied).[/yellow]")
+        else:
+            console.print(
+                "[green]Integrity verified for volume(s): "
+                + ", ".join(_volume_label(v) for v in validated)
+                + ".[/green]"
+            )
+        console.print("[green]All requested checks passed.[/green]")
+
+    code = _handle_action(
+        _run,
+        invalid_password_message="[red]Invalid password or key[/red]",
+        integrity_error_message="[red]Error: container is corrupted or not supported[/red]",
+    )
+    ctx.exit(code)
 
 
 def main(argv: list[str] | None = None) -> int:

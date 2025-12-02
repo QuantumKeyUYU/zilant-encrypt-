@@ -20,6 +20,7 @@ from zilant_encrypt.container.format import (
     HEADER_V1_LEN,
     KEY_MODE_PASSWORD_ONLY,
     KEY_MODE_PQ_HYBRID,
+    MAX_VOLUMES,
     PQ_PLACEHOLDER_CIPHERTEXT_LEN,
     PQ_PLACEHOLDER_SECRET_LEN,
     RESERVED_LEN,
@@ -47,6 +48,22 @@ PAYLOAD_MAGIC = b"ZPAY"
 PAYLOAD_VERSION = 1
 PAYLOAD_META_LEN_SIZE = 4
 STREAM_CHUNK_SIZE = 1024 * 64
+
+
+@dataclass(frozen=True)
+class VolumeLayout:
+    descriptor: VolumeDescriptor
+    ciphertext_len: int
+
+
+@dataclass(frozen=True)
+class ContainerOverview:
+    header: "ContainerHeader"
+    descriptors: list[VolumeDescriptor]
+    header_bytes: bytes
+    layouts: list[VolumeLayout]
+    file_size: int
+    pq_available: bool
 
 
 @dataclass(frozen=True)
@@ -135,6 +152,14 @@ class _PayloadSource:
         if self.temp_dir:
             self.temp_dir.cleanup()
         return False
+
+
+class _NullWriter:
+    def feed(self, data: bytes) -> None:  # pragma: no cover - trivial sink
+        del data
+
+    def finalize(self) -> None:  # pragma: no cover - trivial sink
+        return None
 
 
 class _PasswordOnlyProviderFactory:
@@ -358,6 +383,180 @@ def _decrypt_stream(
     if final_chunk:
         writer.feed(final_chunk)
     writer.finalize()
+
+
+def _compute_volume_layouts(
+    descriptors: list[VolumeDescriptor], header_len: int, file_size: int
+) -> list[VolumeLayout]:
+    if len(descriptors) > MAX_VOLUMES:
+        raise ContainerFormatError(f"Container has too many volumes (max {MAX_VOLUMES})")
+
+    ordered = sorted(descriptors, key=lambda d: d.payload_offset)
+    layouts: list[VolumeLayout] = []
+    previous_end = header_len
+
+    for idx, desc in enumerate(ordered):
+        if desc.payload_offset < header_len:
+            raise ContainerFormatError("Payload offset overlaps header")
+
+        next_offset = ordered[idx + 1].payload_offset if idx + 1 < len(ordered) else file_size
+        length = desc.payload_length or (next_offset - desc.payload_offset - TAG_LEN)
+        if length <= 0:
+            raise ContainerFormatError("Invalid payload length")
+
+        end = desc.payload_offset + length + TAG_LEN
+        if end > file_size:
+            raise ContainerFormatError("Payload exceeds container size")
+        if desc.payload_offset < previous_end:
+            raise ContainerFormatError("Volume payload ranges overlap")
+
+        layouts.append(VolumeLayout(descriptor=desc, ciphertext_len=length))
+        previous_end = end
+
+    return layouts
+
+
+def _load_overview(container_path: Path) -> ContainerOverview:
+    container = Path(container_path)
+    if not container.exists():
+        raise FileNotFoundError(container)
+
+    file_size = container.stat().st_size
+    if file_size < HEADER_V1_LEN + TAG_LEN:
+        raise ContainerFormatError("Container too small")
+
+    with container.open("rb") as f:
+        header, descriptors, header_bytes = read_header_from_stream(f)
+
+    layouts = _compute_volume_layouts(descriptors, header.header_len, file_size)
+    return ContainerOverview(
+        header=header,
+        descriptors=descriptors,
+        header_bytes=header_bytes,
+        layouts=layouts,
+        file_size=file_size,
+        pq_available=pq.available(),
+    )
+
+
+def _select_descriptors(descriptors: list[VolumeDescriptor], volume: str) -> list[VolumeDescriptor]:
+    if volume == "all":
+        return descriptors
+
+    target_id = 0 if volume == "main" else 1
+    selected = [desc for desc in descriptors if desc.volume_id == target_id]
+    if not selected:
+        raise ContainerFormatError(f"Requested volume '{volume}' is not present in the container")
+    return selected
+
+
+def _derive_file_key(
+    descriptor: VolumeDescriptor, password: str, mode: Literal["password", "pq-hybrid"] | None
+) -> bytes:
+    expected_mode = "pq-hybrid" if descriptor.key_mode == KEY_MODE_PQ_HYBRID else "password"
+    if mode is not None and mode != expected_mode:
+        raise UnsupportedFeatureError("requested check mode does not match volume key_mode")
+
+    decrypt_params = Argon2Params(
+        mem_cost_kib=descriptor.argon_mem_cost,
+        time_cost=descriptor.argon_time_cost,
+        parallelism=descriptor.argon_parallelism,
+    )
+
+    if descriptor.key_mode == KEY_MODE_PASSWORD_ONLY:
+        provider = PasswordKeyProvider(password, descriptor.salt_argon2, decrypt_params)
+        return provider.unwrap_file_key(
+            WrappedKey(data=descriptor.wrapped_key, tag=descriptor.wrapped_key_tag),
+        )
+
+    if descriptor.key_mode == KEY_MODE_PQ_HYBRID:
+        if not pq.available():
+            raise PqSupportError("PQ-hybrid containers require oqs support")
+        if (
+            descriptor.pq_wrapped_secret is None
+            or descriptor.pq_ciphertext is None
+            or descriptor.pq_wrapped_secret_tag is None
+        ):
+            raise ContainerFormatError("PQ header missing required fields")
+
+        password_key = derive_key_from_password(
+            password,
+            descriptor.salt_argon2,
+            mem_cost=decrypt_params.mem_cost_kib,
+            time_cost=decrypt_params.time_cost,
+            parallelism=decrypt_params.parallelism,
+        )
+        try:
+            kem_secret = AesGcmEncryptor.decrypt(
+                password_key,
+                WRAP_NONCE,
+                descriptor.pq_wrapped_secret,
+                descriptor.pq_wrapped_secret_tag,
+                b"",
+            )
+        except InvalidTag as exc:
+            raise InvalidPassword("Unable to unwrap KEM secret key") from exc
+
+        shared_secret = pq.decapsulate(descriptor.pq_ciphertext, kem_secret)
+        hkdf = HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=None,
+            info=b"zilant-pq-hybrid",
+        )
+        master_key = hkdf.derive(shared_secret + password_key)
+        try:
+            return AesGcmEncryptor.decrypt(
+                master_key,
+                WRAP_NONCE,
+                descriptor.wrapped_key,
+                descriptor.wrapped_key_tag,
+                b"",
+            )
+        except InvalidTag as exc:
+            raise InvalidPassword("Unable to unwrap file key") from exc
+
+    raise UnsupportedFeatureError("Unsupported key mode")
+
+
+def check_container(
+    container_path: os.PathLike[str] | str,
+    *,
+    password: str | None = None,
+    mode: Literal["password", "pq-hybrid"] | None = None,
+    volume: Literal["main", "decoy", "all"] = "all",
+) -> tuple[ContainerOverview, list[int]]:
+    """Validate container structure and optionally verify tags for selected volumes.
+
+    Returns a tuple of (overview, validated_volume_ids).
+    """
+
+    overview = _load_overview(Path(container_path))
+
+    if password is None:
+        return overview, []
+
+    selected = _select_descriptors(overview.descriptors, volume)
+    validated: list[int] = []
+
+    with Path(container_path).open("rb") as f:
+        for desc in selected:
+            file_key = _derive_file_key(desc, password, mode)
+            layout = next((l for l in overview.layouts if l.descriptor.volume_id == desc.volume_id), None)
+            if layout is None:
+                raise ContainerFormatError("Missing layout information for volume")
+            f.seek(desc.payload_offset)
+            _decrypt_stream(
+                f,
+                _NullWriter(),
+                file_key,
+                desc.nonce_aes_gcm,
+                overview.header_bytes,
+                layout.ciphertext_len,
+            )
+            validated.append(desc.volume_id)
+
+    return overview, validated
 
 
 def encrypt_file(

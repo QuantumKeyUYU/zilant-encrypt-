@@ -249,6 +249,33 @@ def test_v3_metadata_layout_uniform_with_decoy(tmp_path: Path) -> None:
         assert len(pq_descriptors[0].pq_wrapped_secret or b"") == len(pq_descriptors[1].pq_wrapped_secret or b"")
 
 
+def test_check_container_validates_each_volume(tmp_path: Path) -> None:
+    main_data = tmp_path / "main.txt"
+    decoy_data = tmp_path / "decoy.txt"
+    main_data.write_text("MAIN")
+    decoy_data.write_text("DECOY")
+
+    container = tmp_path / "checked.zil"
+    api.encrypt_with_decoy(
+        main_data,
+        container,
+        main_password="main-pass",
+        decoy_password="decoy-pass",
+        input_path_decoy=decoy_data,
+        mode="password",
+        overwrite=True,
+    )
+
+    overview, validated_main = api.check_container(container, password="main-pass", mode="password", volume="main")
+    assert overview.descriptors
+    assert validated_main == [0]
+
+    _overview2, validated_decoy = api.check_container(
+        container, password="decoy-pass", mode="password", volume="decoy"
+    )
+    assert validated_decoy == [1]
+
+
 def test_corrupted_header_bytes_fail_integrity(tmp_path: Path) -> None:
     payload = tmp_path / "data.txt"
     payload.write_text("secret")

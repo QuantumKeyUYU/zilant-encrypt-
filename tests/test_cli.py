@@ -12,7 +12,11 @@ from zilant_encrypt.cli import (
     EXIT_USAGE,
     cli,
 )
+from zilant_encrypt.container import api
+import zilant_encrypt.container.format as fmt
 from zilant_encrypt.crypto import pq
+from zilant_encrypt.crypto.aead import TAG_LEN
+from zilant_encrypt.crypto.kdf import recommended_params
 
 
 def test_cli_encrypt_decrypt_file(tmp_path: Path) -> None:
@@ -446,8 +450,8 @@ def test_cli_info_outputs_modes(tmp_path: Path) -> None:
 
     verbose = runner.invoke(cli, ["info", str(container), "--volumes"])
     assert verbose.exit_code == EXIT_SUCCESS
-    assert "volume 0" in verbose.output
-    assert "volume 1" in verbose.output
+    assert "volume main" in verbose.output
+    assert "volume decoy" in verbose.output
 
 
 def test_cli_info_outputs_pq_mode(tmp_path: Path) -> None:
@@ -479,6 +483,167 @@ def test_cli_info_outputs_pq_mode(tmp_path: Path) -> None:
     assert "pq-hybrid" in result.output
 
 
+def _build_forced_header(
+    monkeypatch: pytest.MonkeyPatch, descriptors: list[fmt.VolumeDescriptor]
+) -> bytes:
+    monkeypatch.setattr(fmt, "_validate_volume_layout", lambda _descriptors: None)
+    monkeypatch.setattr(fmt, "MAX_VOLUMES", max(len(descriptors), fmt.MAX_VOLUMES))
+    first = descriptors[0]
+    return fmt.build_header(
+        key_mode=first.key_mode,
+        header_flags=first.flags,
+        salt_argon2=first.salt_argon2,
+        argon_mem_cost=first.argon_mem_cost,
+        argon_time_cost=first.argon_time_cost,
+        argon_parallelism=first.argon_parallelism,
+        nonce_aes_gcm=first.nonce_aes_gcm,
+        wrapped_key=first.wrapped_key,
+        wrapped_key_tag=first.wrapped_key_tag,
+        reserved=first.reserved,
+        version=3,
+        volume_descriptors=descriptors,
+        common_meta={},
+    )
+
+
+def _descriptor(volume_id: int, offset: int, payload_length: int) -> fmt.VolumeDescriptor:
+    params = recommended_params()
+    salt = bytes([volume_id + 1]) * 16
+    nonce = bytes([volume_id + 2]) * 12
+    return fmt.VolumeDescriptor(
+        volume_id=volume_id,
+        key_mode=fmt.KEY_MODE_PASSWORD_ONLY,
+        flags=0,
+        payload_offset=offset,
+        payload_length=payload_length,
+        salt_argon2=salt,
+        argon_mem_cost=params.mem_cost_kib,
+        argon_time_cost=params.time_cost,
+        argon_parallelism=params.parallelism,
+        nonce_aes_gcm=nonce,
+        wrapped_key=b"k" * 16,
+        wrapped_key_tag=b"t" * 16,
+        reserved=bytes(28),
+    )
+
+
+def test_cli_check_single_volume_success(tmp_path: Path) -> None:
+    runner = CliRunner()
+    source = tmp_path / "source.txt"
+    source.write_text("hello")
+    container = tmp_path / "data.zil"
+    assert runner.invoke(cli, ["encrypt", str(source), str(container), "--password", "pw"]).exit_code == EXIT_SUCCESS
+
+    result = runner.invoke(
+        cli,
+        ["check", str(container), "--password", "pw", "--mode", "password", "--volume", "main"],
+    )
+    assert result.exit_code == EXIT_SUCCESS
+    assert "Integrity verified" in result.output
+
+
+def test_cli_check_skips_crypto_when_password_missing(tmp_path: Path) -> None:
+    runner = CliRunner()
+    source = tmp_path / "src.txt"
+    source.write_text("hello")
+    container = tmp_path / "struct_only.zil"
+    assert runner.invoke(cli, ["encrypt", str(source), str(container), "--password", "pw"]).exit_code == EXIT_SUCCESS
+
+    result = runner.invoke(cli, ["check", str(container)])
+    assert result.exit_code == EXIT_SUCCESS
+    assert "Cryptographic tag verification skipped" in result.output
+
+
+def test_cli_check_detects_corrupted_payload(tmp_path: Path) -> None:
+    runner = CliRunner()
+    source = tmp_path / "src.txt"
+    source.write_text("hello")
+    container = tmp_path / "corrupt.zil"
+    assert runner.invoke(cli, ["encrypt", str(source), str(container), "--password", "pw"]).exit_code == EXIT_SUCCESS
+
+    corrupted = tmp_path / "corrupt_copy.zil"
+    data = bytearray(container.read_bytes())
+    data[-1] ^= 0x01
+    corrupted.write_bytes(data)
+
+    result = runner.invoke(cli, ["check", str(corrupted), "--password", "pw", "--mode", "password"])
+    assert result.exit_code == EXIT_CORRUPT
+    assert "corrupted or not supported" in result.output
+
+    structural = runner.invoke(cli, ["check", str(corrupted)])
+    assert structural.exit_code == EXIT_SUCCESS
+    assert "Cryptographic tag verification skipped" in structural.output
+
+
+def test_cli_check_rejects_excess_volumes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    descriptors = [
+        _descriptor(0, 2048, 32),
+        _descriptor(1, 2144, 32),
+        _descriptor(2, 2240, 32),
+    ]
+    header = _build_forced_header(monkeypatch, descriptors)
+    payload_size = max(d.payload_offset + d.payload_length + TAG_LEN for d in descriptors)
+    forged = tmp_path / "too_many.zil"
+    forged.write_bytes(header.ljust(payload_size, b"\x00"))
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["check", str(forged)])
+    assert result.exit_code == EXIT_CORRUPT
+    assert "container is corrupted" in result.output
+
+
+def test_cli_check_detects_overlapping_payloads(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    descriptors = [
+        _descriptor(0, 2048, 64),
+        _descriptor(1, 2100, 64),
+    ]
+    header = _build_forced_header(monkeypatch, descriptors)
+    payload_size = max(d.payload_offset + d.payload_length + TAG_LEN for d in descriptors)
+    forged = tmp_path / "overlap.zil"
+    forged.write_bytes(header.ljust(payload_size, b"\x00"))
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["check", str(forged)])
+    assert result.exit_code == EXIT_CORRUPT
+    assert "container is corrupted" in result.output
+
+
+def test_cli_check_pq_hybrid_main_and_decoy(tmp_path: Path) -> None:
+    if not pq.available():
+        pytest.skip("oqs not available")
+
+    runner = CliRunner()
+    main_src = tmp_path / "main.txt"
+    decoy_src = tmp_path / "decoy.txt"
+    main_src.write_text("MAIN")
+    decoy_src.write_text("DECOY")
+    container = tmp_path / "pq_check.zil"
+
+    api.encrypt_with_decoy(
+        main_src,
+        container,
+        main_password="pw-main",
+        decoy_password="pw-decoy",
+        input_path_decoy=decoy_src,
+        mode="pq-hybrid",
+        overwrite=True,
+    )
+
+    main_check = runner.invoke(
+        cli,
+        ["check", str(container), "--password", "pw-main", "--mode", "pq-hybrid", "--volume", "main"],
+    )
+    assert main_check.exit_code == EXIT_SUCCESS
+    assert "Integrity verified" in main_check.output
+
+    decoy_check = runner.invoke(
+        cli,
+        ["check", str(container), "--password", "pw-decoy", "--mode", "pq-hybrid", "--volume", "decoy"],
+    )
+    assert decoy_check.exit_code == EXIT_SUCCESS
+    assert "Integrity verified" in decoy_check.output
+
+
 def test_cli_info_default_hides_additional_volumes(tmp_path: Path) -> None:
     runner = CliRunner()
     main_src = tmp_path / "main.txt"
@@ -507,10 +672,10 @@ def test_cli_info_default_hides_additional_volumes(tmp_path: Path) -> None:
 
     default_info = runner.invoke(cli, ["info", str(container)])
     assert default_info.exit_code == EXIT_SUCCESS
-    assert "volume 1" not in default_info.output.lower()
+    assert "volume decoy" not in default_info.output.lower()
     verbose = runner.invoke(cli, ["info", str(container), "--volumes"])
     assert verbose.exit_code == EXIT_SUCCESS
-    assert "volume 1" in verbose.output.lower()
+    assert "volume decoy" in verbose.output.lower()
 
 
 def test_cli_reports_corrupted_container(tmp_path: Path) -> None:
