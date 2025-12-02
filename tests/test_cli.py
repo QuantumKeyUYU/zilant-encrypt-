@@ -11,6 +11,7 @@ from zilant_encrypt.cli import (
     EXIT_PQ_UNSUPPORTED,
     EXIT_SUCCESS,
     EXIT_USAGE,
+    PQ_ERROR_MESSAGE,
     cli,
 )
 from zilant_encrypt.container import api
@@ -280,6 +281,17 @@ def test_cli_pq_mode_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
         ["encrypt", str(source), str(tmp_path / "out.zil"), "--password", "pw", "--mode", "pq-hybrid"],
     )
     assert result.exit_code == EXIT_PQ_UNSUPPORTED
+    assert PQ_ERROR_MESSAGE in result.output
+
+
+def test_cli_accepts_pq_hybrid_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr("zilant_encrypt.crypto.pq.available", lambda: False)
+    result = runner.invoke(
+        cli, ["decrypt", "fake.zil", "--password", "pw", "--mode", "pq_hybrid"]
+    )
+    assert result.exit_code == EXIT_PQ_UNSUPPORTED
+    assert PQ_ERROR_MESSAGE in result.output
 
 
 def test_cli_prevents_mode_mismatch(tmp_path: Path) -> None:
@@ -505,6 +517,37 @@ def test_cli_info_outputs_modes(tmp_path: Path) -> None:
     assert "volume main" in verbose.output
     assert "additional volumes may be present" in verbose.output
 
+
+def test_cli_info_password_match_summary(tmp_path: Path) -> None:
+    runner = CliRunner()
+    main_src = tmp_path / "main.txt"
+    decoy_src = tmp_path / "decoy.txt"
+    main_src.write_text("MAIN")
+    decoy_src.write_text("DECOY")
+    container = tmp_path / "info_summary.zil"
+
+    assert (
+        runner.invoke(
+            cli,
+            [
+                "encrypt",
+                str(main_src),
+                str(container),
+                "--password",
+                "pw-main",
+                "--decoy-password",
+                "pw-decoy",
+                "--decoy-input",
+                str(decoy_src),
+            ],
+        ).exit_code
+        == EXIT_SUCCESS
+    )
+
+    result = runner.invoke(cli, ["info", str(container), "--password", "pw-main"])
+    assert result.exit_code == EXIT_SUCCESS
+    assert "Password matches" in result.output
+    assert "main volume" in result.output
 
 def test_cli_info_outputs_pq_mode(tmp_path: Path) -> None:
     if not pq.available():
