@@ -1,14 +1,14 @@
 """Desktop GUI for Zilant Encrypt."""
 from __future__ import annotations
 
-from pathlib import Path
 import importlib.util
 import sys
-
-from zilant_encrypt import __version__
+from pathlib import Path
+from typing import Any, Literal, cast
 
 from zilant_encrypt.container import (
     ContainerOverview,
+    ModeLiteral,
     check_container,
     decrypt_auto_volume,
     decrypt_file,
@@ -73,7 +73,7 @@ if QT_AVAILABLE:
     class ZilantWindow(QtWidgets.QMainWindow):
         def __init__(self) -> None:
             super().__init__()
-            self.setWindowTitle(f"Zilant Encrypt v{__version__}")
+            self.setWindowTitle("Zilant Encrypt")
             self.resize(820, 720)
 
             self._output_path: Path | None = None
@@ -104,7 +104,7 @@ if QT_AVAILABLE:
             title.setFont(title_font)
 
             subtitle = QtWidgets.QLabel(
-                f"v{__version__} · Encrypted containers with decoys & PQ-hybrid"
+                "Encrypted containers with decoys & PQ-hybrid (local only)"
             )
             subtitle_font = QtGui.QFont()
             subtitle_font.setPointSize(12)
@@ -268,18 +268,10 @@ if QT_AVAILABLE:
             self.action_button.clicked.connect(self._on_action_clicked)
             action_layout.addWidget(self.action_button)
 
-            aux_layout = QtWidgets.QHBoxLayout()
             self.open_output_button = QtWidgets.QPushButton("Open output folder")
             self.open_output_button.setEnabled(False)
             self.open_output_button.clicked.connect(self._open_output_folder)
-            aux_layout.addWidget(self.open_output_button)
-
-            about_button = QtWidgets.QPushButton("About")
-            about_button.clicked.connect(self._show_about_dialog)
-            aux_layout.addWidget(about_button)
-            aux_layout.addStretch(1)
-
-            action_layout.addLayout(aux_layout)
+            action_layout.addWidget(self.open_output_button)
 
             self.workflow_layout.addLayout(action_layout)
 
@@ -331,16 +323,11 @@ if QT_AVAILABLE:
 
         def _build_status_bar(self) -> None:
             self.status_label = QtWidgets.QLabel(STATUS_READY)
-            footer_version = QtWidgets.QLabel(
-                f"v{__version__} · Encrypted containers with decoys & PQ-hybrid"
-            )
-            footer_version.setStyleSheet("color: #A0A0A0; font-size: 11px;")
             footer = QtWidgets.QLabel("No telemetry. Local-only crypto.")
             footer.setStyleSheet("color: #A0A0A0; font-size: 11px;")
 
             status_layout = QtWidgets.QVBoxLayout()
             status_layout.addWidget(self.status_label)
-            status_layout.addWidget(footer_version)
             status_layout.addWidget(footer)
             self.main_layout.addLayout(status_layout)
 
@@ -362,14 +349,17 @@ if QT_AVAILABLE:
             self.setPalette(palette)
 
         def _toggle_password_visibility(self, state: int) -> None:
+            # Explicitly cast Qt enum value to int for comparison
+            is_checked = state == QtCore.Qt.CheckState.Checked.value
             self.password_edit.setEchoMode(
                 QtWidgets.QLineEdit.EchoMode.Normal
-                if state == QtCore.Qt.CheckState.Checked
+                if is_checked
                 else QtWidgets.QLineEdit.EchoMode.Password
             )
 
         def _toggle_inspect_password(self, state: int) -> None:
-            enabled = state == QtCore.Qt.CheckState.Checked
+            # Explicitly cast Qt enum value to int for comparison
+            enabled = state == QtCore.Qt.CheckState.Checked.value
             self.inspect_password_edit.setEnabled(enabled)
             if not enabled:
                 self.inspect_password_edit.clear()
@@ -485,7 +475,7 @@ if QT_AVAILABLE:
         def _active_mode(self) -> str:
             return "encrypt" if self.encrypt_radio.isChecked() else "decrypt"
 
-        def _selected_security_mode(self) -> str | None:
+        def _selected_security_mode(self) -> ModeLiteral | None:
             if self.mode_pq_radio.isChecked():
                 return normalize_mode("pq-hybrid")
             if self.mode_password_radio.isChecked():
@@ -608,7 +598,7 @@ if QT_AVAILABLE:
                 self._set_status("Output exists; overwrite declined")
                 return
 
-            mode = None
+            mode: ModeLiteral | None = None
             if self.assume_pq_checkbox.isChecked():
                 mode = normalize_mode("pq-hybrid")
 
@@ -627,11 +617,13 @@ if QT_AVAILABLE:
                     )
                     status_msg = f"Done: Decrypted {volume_label} to {output_path}"
                 else:
+                    # Cast volume_choice to strictly Literal
+                    vol_literal = cast(Literal["main", "decoy"], volume_choice)
                     decrypt_file(
                         input_path,
                         output_path,
                         password=password,
-                        volume_selector=volume_choice,
+                        volume_selector=vol_literal,
                         mode=mode,
                         overwrite=self.overwrite_checkbox.isChecked(),
                     )
@@ -702,40 +694,6 @@ if QT_AVAILABLE:
         def _show_info(self, title: str, message: str) -> None:
             QtWidgets.QMessageBox.information(self, title, message)
 
-        def _show_about_dialog(self) -> None:
-            dialog = QtWidgets.QDialog(self)
-            dialog.setWindowTitle("About Zilant Encrypt")
-
-            layout = QtWidgets.QVBoxLayout(dialog)
-
-            title = QtWidgets.QLabel("Zilant Encrypt")
-            title_font = QtGui.QFont()
-            title_font.setPointSize(14)
-            title_font.setBold(True)
-            title.setFont(title_font)
-            layout.addWidget(title)
-
-            version_label = QtWidgets.QLabel(f"Version v{__version__}")
-            layout.addWidget(version_label)
-
-            description = QtWidgets.QLabel(
-                "Secure local containers with optional decoy volumes and PQ-hybrid mode."
-            )
-            description.setWordWrap(True)
-            layout.addWidget(description)
-
-            link = QtWidgets.QLabel(
-                '<a href="https://github.com/zilant-team/zilant-encrypt">https://github.com/zilant-team/zilant-encrypt</a>'
-            )
-            link.setOpenExternalLinks(True)
-            layout.addWidget(link)
-
-            buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok)
-            buttons.accepted.connect(dialog.accept)
-            layout.addWidget(buttons)
-
-            dialog.exec()
-
 
     def create_app() -> QtWidgets.QApplication:
         app = QtWidgets.QApplication(sys.argv)
@@ -746,9 +704,8 @@ if QT_AVAILABLE:
 
 else:
 
-    def create_app():  # type: ignore[missing-type-doc]
+    def create_app() -> Any:
         raise ImportError("PySide6 is required for the GUI. Install with 'pip install \"zilant-encrypt[gui]\"'.")
-
 
 
 def main() -> None:
