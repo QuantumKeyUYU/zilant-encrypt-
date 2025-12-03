@@ -32,6 +32,14 @@ tool is usable without reading the source.
 python -m pip install .
 # or with dev tools
 python -m pip install .[dev]
+# desktop GUI extras
+python -m pip install .[gui]
+```
+
+Launch the desktop shell (requires the `gui` extra):
+
+```bash
+python -m zilant_encrypt.gui_app
 ```
 
 ## Quick start
