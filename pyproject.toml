@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 zilenc = "zilant_encrypt.cli:main"
+zilenc-gui = "zilant_encrypt.gui_app:main"
 
 [project.optional-dependencies]
 dev = [

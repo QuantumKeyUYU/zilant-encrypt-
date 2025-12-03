@@ -32,18 +32,31 @@ tool is usable without reading the source.
 python -m pip install .
 # or with dev tools
 python -m pip install .[dev]
-# desktop GUI extras
-python -m pip install .[gui]
 ```
 
-Launch the desktop shell (requires the `gui` extra):
+### Desktop GUI
+
+Install the GUI extras and launch the desktop shell:
 
 ```bash
-python -m zilant_encrypt.gui_app
+pip install "zilant-encrypt[gui]"
+zilenc-gui
 ```
 
 The GUI provides two tabs: **Encrypt / Decrypt** for day-to-day use and **Inspect / Check** to
 validate container structure or tags without decrypting payloads.
+
+### Version
+
+Check the installed version from the CLI:
+
+```bash
+zilenc version
+# or
+zilenc --version
+```
+
+The GUI shows the version in the window title and in the About dialog.
 
 ## Quick start
 
