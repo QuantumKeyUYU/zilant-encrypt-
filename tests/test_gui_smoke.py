@@ -26,6 +26,7 @@ def test_gui_entrypoints_or_warning() -> None:
 
 def test_format_overview_report() -> None:
     from zilant_encrypt import gui_app
+    from zilant_encrypt.gui_i18n import get_strings
 
     overview = SimpleNamespace(
         header=SimpleNamespace(version=3),
@@ -36,7 +37,10 @@ def test_format_overview_report() -> None:
         pq_available=True,
     )
 
-    report = gui_app._format_overview_report(Path("sample.zil"), overview, [0], True)
+    strings = get_strings("en")
+    report = gui_app._format_overview_report(
+        Path("sample.zil"), overview, [0], True, strings
+    )
 
     assert "sample.zil" in report
     assert "main" in report
@@ -59,8 +63,41 @@ def test_window_title_includes_version() -> None:
     window = gui_app.ZilantWindow()
     title = window.windowTitle()
 
-    assert "Zilant Encrypt" in title
+    assert window.tr.app_title in title
     assert zilant_encrypt.__version__ in title
+
+    window.close()
+    if created_app:
+        app.quit()
+
+
+def test_lang_switch_updates_title_and_status() -> None:
+    import zilant_encrypt
+    from zilant_encrypt import gui_app
+
+    if not gui_app.QT_AVAILABLE:
+        pytest.skip("PySide6 is not installed")
+
+    app = gui_app.QtWidgets.QApplication.instance()
+    created_app = False
+    if app is None:
+        app = gui_app.QtWidgets.QApplication([])
+        created_app = True
+
+    window = gui_app.ZilantWindow()
+
+    assert hasattr(window, "lang_combo")
+    assert window.status_lbl.text() == window.tr.status_ready
+
+    initial_title = window.windowTitle()
+    next_index = 1 if window.lang_combo.currentIndex() == 0 else 0
+    window.lang_combo.setCurrentIndex(next_index)
+    gui_app.QtWidgets.QApplication.processEvents()
+    updated_title = window.windowTitle()
+
+    assert initial_title != updated_title
+    assert window.tr.app_title in updated_title
+    assert zilant_encrypt.__version__ in updated_title
 
     window.close()
     if created_app:
