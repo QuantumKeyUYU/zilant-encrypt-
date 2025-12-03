@@ -1,16 +1,18 @@
-"""Desktop GUI for Zilant Encrypt with Modern Zinc theme and Robust Path Logic."""
+"""Desktop GUI for Zilant Encrypt - Silicon Valley Edition.
+
+Premium "Dark Zinc" theme, Gradient accents, Robust Type checking.
+"""
 from __future__ import annotations
 
 import importlib.util
 import inspect
 import locale
-import platform
-import subprocess
 import sys
 import traceback
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal, cast
 
+# --- ZILANT LIBRARY IMPORTS ---
 from zilant_encrypt import __version__
 from zilant_encrypt.container import (
     ContainerOverview,
@@ -30,6 +32,7 @@ from zilant_encrypt.errors import (
 )
 from zilant_encrypt.gui_i18n import Lang, Strings, get_strings
 
+# --- QT CHECK ---
 QT_AVAILABLE = importlib.util.find_spec("PySide6") is not None
 
 if QT_AVAILABLE:
@@ -46,183 +49,291 @@ try:
 except Exception:
     _DECRYPT_AUTO_SUPPORTS_OVERWRITE = False
 
-# --- Design Tokens ---
-BG_MAIN = "#18181B"
-BG_SURFACE = "#27272A"
-BG_INPUT = "#3F3F46"
-ACCENT = "#3B82F6"
-ACCENT_HOVER = "#60A5FA"
-TEXT_PRIMARY = "#F4F4F5"
-TEXT_SECONDARY = "#A1A1AA"
-BORDER = "#52525B"
-SUCCESS_COLOR = "#22C55E"
-ERROR_COLOR = "#EF4444"
+# --- "SILICON VALLEY" THEME CONFIGURATION ---
+THEME = {
+    # Deep, expensive dark tones
+    "bg_app": "#09090B",        # Almost black (Zinc-950)
+    "bg_panel": "#141417",      # Slightly lighter
+    "bg_input": "#1C1C1F",      # Input background
+    "bg_hover": "#27272A",      # Input hover
 
-FONT_FAMILY = "Segoe UI, Inter, Roboto, sans-serif"
+    # Borders
+    "border_dim": "#27272A",
+    "border_active": "#3F3F46",
+
+    # Typography
+    "text_main": "#FAFAFA",     # Pure white
+    "text_sec": "#A1A1AA",      # Zinc-400
+    "text_dim": "#52525B",      # Zinc-600
+
+    # Gradients (Simulated via QSS)
+    "accent_blue": "#3B82F6",   # Encrypt Primary
+    "accent_cyan": "#06B6D4",   # Encrypt Secondary (Gradient target)
+    "accent_purp": "#8B5CF6",   # Decrypt Primary
+    "accent_pink": "#EC4899",   # Decrypt Secondary
+
+    "success": "#10B981",       # Emerald
+    "error": "#EF4444",         # Red
+}
+
+FONT_FAMILY = (
+    "Segoe UI Variable Display, Segoe UI, Inter, Roboto, Helvetica, sans-serif"
+)
 
 STYLESHEET = f"""
+/* GLOBAL RESET */
 * {{
     font-family: "{FONT_FAMILY}";
+    font-size: 14px;
     outline: none;
+    color: {THEME['text_main']};
+    border: none;
 }}
 
-QMainWindow, QWidget#ContentWidget {{
-    background-color: {BG_MAIN};
-    color: {TEXT_PRIMARY};
+QMainWindow, QWidget#Content {{
+    background-color: {THEME['bg_app']};
 }}
 
+/* TYPOGRAPHY */
+QLabel {{ color: {THEME['text_main']}; }}
+QLabel#H1 {{
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    background-color: transparent;
+}}
+QLabel#Subtitle {{
+    color: {THEME['text_sec']};
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 10px;
+}}
+QLabel#H2 {{
+    font-size: 12px;
+    font-weight: 700;
+    color: {THEME['text_sec']};
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 4px;
+    margin-bottom: 4px;
+}}
+QLabel#Tip {{
+    color: {THEME['text_dim']};
+    font-size: 12px;
+    font-style: italic;
+}}
+
+/* PANELS (CARDS) */
 QGroupBox {{
-    background-color: {BG_SURFACE};
-    border: 1px solid {BORDER};
-    border-radius: 10px;
-    margin-top: 18px;
-    padding: 18px;
+    background-color: {THEME['bg_panel']};
+    border: 1px solid {THEME['border_dim']};
+    border-radius: 16px;
+    margin-top: 1.2em;
+    padding: 24px;
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
-    left: 12px;
-    padding: 0 6px;
-    color: {ACCENT};
+    subcontrol-position: top left;
+    left: 20px;
+    padding: 0 5px;
+    color: {THEME['accent_blue']};
     font-weight: 700;
+    font-size: 12px;
 }}
 
-QLabel {{ color: {TEXT_PRIMARY}; }}
-QLabel#H1 {{ font-size: 20px; font-weight: 800; }}
-QLabel#Subtitle {{ color: {TEXT_SECONDARY}; font-size: 13px; }}
-QLabel#H2 {{ font-size: 14px; font-weight: 700; margin-bottom: 6px; }}
-QLabel#StatusIcon {{ font-size: 16px; }}
-
+/* INPUT FIELDS */
 QLineEdit {{
-    background-color: {BG_INPUT};
-    border: 1px solid {BORDER};
-    border-radius: 8px;
-    padding: 12px 14px;
-    color: {TEXT_PRIMARY};
+    background-color: {THEME['bg_input']};
+    border: 1px solid {THEME['border_dim']};
+    border-radius: 10px;
+    padding: 12px 16px;
     font-size: 14px;
+    selection-background-color: {THEME['accent_blue']};
+}}
+QLineEdit:hover {{
+    background-color: {THEME['bg_hover']};
+    border: 1px solid {THEME['border_active']};
 }}
 QLineEdit:focus {{
-    border: 1px solid {ACCENT};
-    background-color: #45454a;
+    background-color: {THEME['bg_input']};
+    border: 1px solid {THEME['accent_blue']};
+    color: white;
 }}
 QLineEdit:disabled {{
-    color: {TEXT_SECONDARY};
-    background-color: #2D2D30;
-    border-color: #444;
+    background-color: {THEME['bg_app']};
+    color: {THEME['text_dim']};
+    border: 1px dashed {THEME['border_dim']};
 }}
 
+/* TEXT AREA (LOG) */
+QPlainTextEdit {{
+    background-color: {THEME['bg_input']};
+    border: 1px solid {THEME['border_dim']};
+    border-radius: 12px;
+    padding: 16px;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.4;
+    color: {THEME['text_sec']};
+}}
+
+/* BUTTONS */
 QPushButton {{
-    background-color: {BG_INPUT};
-    border: 1px solid {BORDER};
+    background-color: {THEME['bg_hover']};
+    border: 1px solid {THEME['border_active']};
     border-radius: 8px;
-    padding: 10px 14px;
-    color: {TEXT_PRIMARY};
+    padding: 10px 18px;
     font-weight: 600;
+    font-size: 13px;
 }}
 QPushButton:hover {{
-    background-color: #52525B;
-    border-color: #666;
+    background-color: #3F3F46;
+    border-color: #52525B;
 }}
-QPushButton:pressed {{
-    background-color: #2d2d30;
-}}
+QPushButton:pressed {{ background-color: {THEME['bg_app']}; }}
 
+/* PRIMARY ACTION BUTTON - Gradient & Glow */
 QPushButton#PrimaryButton {{
-    background-color: {ACCENT};
-    border: 1px solid {ACCENT};
+    background-color: {THEME['accent_blue']};
+    border: none;
     color: white;
+    font-size: 16px;
     font-weight: 800;
-    padding: 12px 20px;
+    letter-spacing: 0.5px;
+    padding: 16px 32px;
+    border-radius: 12px;
 }}
 QPushButton#PrimaryButton:hover {{
-    background-color: {ACCENT_HOVER};
-    border-color: {ACCENT_HOVER};
+    margin-top: -1px;
+    margin-bottom: 1px;
 }}
 
+/* GHOST BUTTON */
 QPushButton#GhostButton {{
     background: transparent;
     border: none;
-    color: {ACCENT};
-    font-weight: 700;
+    color: {THEME['text_sec']};
+    text-align: right;
 }}
-QPushButton#GhostButton:hover {{
-    text-decoration: underline;
-    color: {ACCENT_HOVER};
-}}
+QPushButton#GhostButton:hover {{ color: white; text-decoration: underline; }}
 
-QCheckBox, QRadioButton {{
-    color: {TEXT_PRIMARY};
-    spacing: 8px;
+/* CHECKBOX & RADIO */
+QRadioButton, QCheckBox {{
+    spacing: 12px;
+    color: {THEME['text_main']};
     font-size: 14px;
+    font-weight: 400;
+}}
+QRadioButton::indicator, QCheckBox::indicator {{
+    width: 20px;
+    height: 20px;
+    border-radius: 10px;
+    border: 2px solid {THEME['border_active']};
+    background-color: {THEME['bg_input']};
+}}
+QCheckBox::indicator {{ border-radius: 6px; }}
+
+QRadioButton::indicator:checked, QCheckBox::indicator:checked {{
+    border-color: {THEME['accent_blue']};
+    background-color: {THEME['accent_blue']};
+    image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E");
+}}
+QRadioButton::indicator:checked {{
+    image: none;
+    background-color: {THEME['accent_blue']};
+    border: 5px solid {THEME['bg_input']};
 }}
 
-QProgressBar {{
-    background-color: {BG_INPUT};
-    border: none;
-    border-radius: 3px;
-    height: 6px;
+/* TABS */
+QTabWidget::pane {{ border: none; }}
+QTabBar::tab {{
+    background: transparent;
+    color: {THEME['text_dim']};
+    padding: 12px 24px;
+    font-size: 14px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 3px solid transparent;
+    margin-right: 10px;
 }}
-QProgressBar::chunk {{
-    background-color: {ACCENT};
+QTabBar::tab:hover {{ color: {THEME['text_sec']}; }}
+QTabBar::tab:selected {{
+    color: {THEME['text_main']};
+    border-bottom: 3px solid {THEME['accent_blue']};
 }}
 
-QComboBox {{
-    background-color: {BG_INPUT};
-    border: 1px solid {BORDER};
-    border-radius: 8px;
-    padding: 8px 12px;
-    color: {TEXT_PRIMARY};
+/* SCROLLBAR */
+QScrollBar:vertical {{
+    background: {THEME['bg_app']};
+    width: 10px;
+    margin: 0;
 }}
-QComboBox::drop-down {{ border: none; width: 24px; }}
+QScrollBar::handle:vertical {{
+    background: {THEME['bg_hover']};
+    min-height: 40px;
+    border-radius: 5px;
+    border: 2px solid {THEME['bg_app']};
+}}
+QScrollBar::handle:vertical:hover {{ background: {THEME['text_dim']}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 """
 
 
 def _detect_lang() -> Lang:
+    """Detect UI language from current locale without using deprecated APIs."""
     try:
-        code, _ = locale.getdefaultlocale()
-        if code and code.lower().startswith("ru"):
+        lang, _ = locale.getlocale()
+        if isinstance(lang, str) and lang.lower().startswith("ru"):
             return "ru"
     except Exception:
         pass
     return "en"
 
 
-def _format_overview_report(
+def _format_report(
     path: Path,
     overview: ContainerOverview,
     validated: list[int],
     pq_available: bool,
     strings: Strings,
 ) -> str:
-    version = overview.header.version
     lines: list[str] = [
-        strings.overview_file.format(path=path),
-        strings.overview_version.format(version=version),
-        "-" * 40,
-        strings.overview_volumes,
+        f"TARGET:  {path.name}",
+        f"PATH:    {path.parent}",
+        f"VERSION: v{overview.header.version}",
+        "=" * 50,
+        f"{strings.overview_volumes.upper()}",
+        "",
+        f"{'ID':<4} {'STATUS':<10} {'LABEL':<12} {'ALGORITHM'}",
+        f"{'-' * 4} {'-' * 10} {'-' * 12} {'-' * 20}",
     ]
 
-    password_used = bool(validated)
+    has_auth = bool(validated)
 
     for desc in overview.descriptors:
         if desc.volume_index == 0:
-            label = strings.overview_label_main.upper()
+            label = "MAIN"
         elif desc.volume_index == 1:
-            label = strings.overview_label_decoy.upper()
+            label = "DECOY"
         else:
-            label = f"VOL #{desc.volume_index}"
+            label = f"#{desc.volume_index}"
 
-        mode = "PQ-HYBRID" if desc.key_mode == KEY_MODE_PQ_HYBRID else "STANDARD"
+        mode_str = "PQ-Hybrid" if desc.key_mode == KEY_MODE_PQ_HYBRID else "AES-GCM"
 
-        if password_used:
-            status = "[ OK ]" if desc.volume_index in validated else "[ -- ]"
-        else:
-            status = "[ ?? ]"
+        status_txt = "?"
+        if has_auth:
+            status_txt = "UNLOCKED" if desc.volume_index in validated else "LOCKED"
 
-        lines.append(f"{status} {label:<8} | {mode}")
+        lines.append(
+            f"{desc.volume_index:<4} {status_txt:<10} {label:<12} {mode_str}"
+        )
 
-    lines.append("-" * 40)
-    pq_status = "YES" if pq_available else "NO"
-    lines.append(f"System PQ Support: {pq_status}")
+    lines.append("")
+    lines.append("=" * 50)
+    pq_str = "DETECTED" if pq_available else "NOT FOUND"
+    lines.append(f"QUANTUM SHIELD: {pq_str}")
+
     return "\n".join(lines)
 
 
@@ -246,13 +357,14 @@ if QT_AVAILABLE:
             except PqSupportError:
                 self.finished_error.emit(self._strings.processing_requires_pq)
             except (ContainerFormatError, IntegrityError) as e:
+                msg = str(e).split("(")[0] if "(" in str(e) else str(e)
                 self.finished_error.emit(
-                    self._strings.processing_integrity_error.format(error=e)
+                    self._strings.processing_integrity_error.format(error=msg)
                 )
-            except Exception as e:
+            except Exception as e:  # pragma: no cover - debug path
                 traceback.print_exc()
                 self.finished_error.emit(
-                    self._strings.processing_unexpected_error.format(error=e)
+                    self._strings.processing_unexpected_error.format(error=str(e))
                 )
 
     class ZilantWindow(QtWidgets.QMainWindow):
@@ -261,727 +373,762 @@ if QT_AVAILABLE:
             self._lang: Lang = _detect_lang()
             self.ui_strings: Strings = get_strings(self._lang)
 
-            self.setWindowTitle(f"{self.ui_strings.app_title} v{__version__}")
-            self.resize(1040, 840)
-            self.setMinimumSize(900, 700)
+            self.setWindowTitle("Zilant Encrypt")
+            self.setMinimumSize(1000, 780)
 
             self._worker: TaskWorker | None = None
             self._output_path: Path | None = None
             self._temp_report: str | None = None
-            self._status_state: Literal["ready", "processing", "error"] = "ready"
 
-            self.setStyleSheet(STYLESHEET)
+            container = QtWidgets.QWidget()
+            container.setObjectName("Content")
+            self.setCentralWidget(container)
 
-            content = QtWidgets.QWidget()
-            content.setObjectName("ContentWidget")
-            self.setCentralWidget(content)
+            self.main_layout = QtWidgets.QVBoxLayout(container)
+            self.main_layout.setContentsMargins(40, 40, 40, 30)
+            self.main_layout.setSpacing(24)
 
-            layout = QtWidgets.QVBoxLayout(content)
-            layout.setContentsMargins(28, 26, 28, 20)
-            layout.setSpacing(18)
+            self._build_header()
 
-            self._build_header(layout)
             self.tabs = QtWidgets.QTabWidget()
-            layout.addWidget(self.tabs)
+            self.main_layout.addWidget(self.tabs)
 
             self._build_encrypt_tab()
             self._build_inspect_tab()
-            self._build_footer(layout)
+            self._build_footer()
 
+            self.setStyleSheet(STYLESHEET)
             self._retranslate_ui()
-            self._update_defaults()
+            self._validate_encrypt_tab()
 
-        def _build_header(self, parent_layout: QtWidgets.QVBoxLayout) -> None:
-            header = QtWidgets.QWidget()
-            h_layout = QtWidgets.QHBoxLayout(header)
-            h_layout.setContentsMargins(0, 0, 0, 0)
+        # ---------- HEADER ----------
 
-            title_block = QtWidgets.QVBoxLayout()
-            self.title_lbl = QtWidgets.QLabel(self.ui_strings.app_title)
-            self.title_lbl.setObjectName("H1")
-            self.subtitle_lbl = QtWidgets.QLabel(self.ui_strings.subtitle)
-            self.subtitle_lbl.setObjectName("Subtitle")
-            title_block.addWidget(self.title_lbl)
-            title_block.addWidget(self.subtitle_lbl)
+        def _build_header(self) -> None:
+            top = QtWidgets.QWidget()
+            layout = QtWidgets.QHBoxLayout(top)
+            layout.setContentsMargins(0, 0, 0, 0)
 
-            h_layout.addLayout(title_block)
-            h_layout.addStretch()
+            title_box = QtWidgets.QVBoxLayout()
+            title_box.setSpacing(2)
 
-            self.lang_combo = QtWidgets.QComboBox()
-            self.lang_combo.addItems(["English", "Русский"])
-            self.lang_combo.setItemData(0, "en")
-            self.lang_combo.setItemData(1, "ru")
-            self.lang_combo.setCurrentIndex(0 if self._lang == "en" else 1)
-            self.lang_combo.currentIndexChanged.connect(self._on_lang_changed)
+            self.lbl_title = QtWidgets.QLabel("Zilant Encrypt")
+            self.lbl_title.setObjectName("H1")
 
-            self.about_btn = QtWidgets.QPushButton(self.ui_strings.about)
-            self.about_btn.clicked.connect(self._show_about_dialog)
+            self.lbl_subtitle = QtWidgets.QLabel(
+                "Zero-knowledge | Post-Quantum | Plausible Deniability"
+            )
+            self.lbl_subtitle.setObjectName("Subtitle")
 
-            h_layout.addWidget(self.lang_combo)
-            h_layout.addWidget(self.about_btn)
+            title_box.addWidget(self.lbl_title)
+            title_box.addWidget(self.lbl_subtitle)
+            layout.addLayout(title_box)
+            layout.addStretch()
 
-            parent_layout.addWidget(header)
+            controls = QtWidgets.QHBoxLayout()
+            controls.setSpacing(10)
+
+            self.combo_lang = QtWidgets.QComboBox()
+            self.combo_lang.setFixedWidth(110)
+            self.combo_lang.addItems(["English", "Русский"])
+            self.combo_lang.setItemData(0, "en")
+            self.combo_lang.setItemData(1, "ru")
+            self.combo_lang.setCurrentIndex(1 if self._lang == "ru" else 0)
+            self.combo_lang.currentIndexChanged.connect(self._on_lang_changed)
+
+            self.btn_about = QtWidgets.QPushButton("?")
+            self.btn_about.setFixedWidth(40)
+            self.btn_about.clicked.connect(self._show_about)
+
+            controls.addWidget(self.combo_lang)
+            controls.addWidget(self.btn_about)
+            layout.addLayout(controls)
+
+            self.main_layout.addWidget(top)
+
+        # ---------- ENCRYPT TAB ----------
 
         def _build_encrypt_tab(self) -> None:
-            tab = QtWidgets.QWidget()
-            tab.setObjectName("ContentWidget")
-            self.tabs.addTab(tab, "")
+            page = QtWidgets.QWidget()
+            page.setObjectName("Content")
 
-            vbox = QtWidgets.QVBoxLayout(tab)
-            vbox.setContentsMargins(6, 12, 6, 12)
-            vbox.setSpacing(16)
+            scroll = QtWidgets.QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+            scroll.setStyleSheet("background: transparent;")
 
-            mode_group = QtWidgets.QGroupBox()
-            mode_group.setTitle(self.ui_strings.action_label)
-            mode_layout = QtWidgets.QHBoxLayout(mode_group)
-            mode_layout.setSpacing(14)
+            wrapper = QtWidgets.QWidget()
+            wrapper.setObjectName("Content")
+            scroll.setWidget(wrapper)
 
-            self.encrypt_radio = QtWidgets.QRadioButton(self.ui_strings.encrypt)
-            self.decrypt_radio = QtWidgets.QRadioButton(self.ui_strings.decrypt)
-            self.encrypt_radio.setChecked(True)
-            self.encrypt_radio.toggled.connect(self._on_op_mode_changed)
+            layout = QtWidgets.QVBoxLayout(wrapper)
+            layout.setContentsMargins(0, 10, 0, 10)
+            layout.setSpacing(24)
 
-            mode_layout.addWidget(self.encrypt_radio)
-            mode_layout.addWidget(self.decrypt_radio)
-            mode_layout.addStretch()
-            vbox.addWidget(mode_group)
+            center_lay = QtWidgets.QHBoxLayout(page)
+            center_lay.addWidget(scroll)
 
-            io_group = QtWidgets.QGroupBox()
-            io_group.setTitle(self.ui_strings.input_output_group)
-            io_layout = QtWidgets.QVBoxLayout(io_group)
-            io_layout.setSpacing(14)
+            # 1. Operation mode
+            self.grp_action = QtWidgets.QGroupBox()
+            act_lay = QtWidgets.QHBoxLayout(self.grp_action)
+            act_lay.setSpacing(30)
+
+            self.rad_enc = QtWidgets.QRadioButton()
+            self.rad_enc.setChecked(True)
+            self.rad_enc.toggled.connect(self._on_mode_switched)
+            self.rad_dec = QtWidgets.QRadioButton()
+
+            act_lay.addWidget(self.rad_enc)
+            act_lay.addWidget(self.rad_dec)
+            act_lay.addStretch()
+            layout.addWidget(self.grp_action)
+
+            # 2. Source & Dest
+            self.grp_io = QtWidgets.QGroupBox()
+            io_lay = QtWidgets.QVBoxLayout(self.grp_io)
+            io_lay.setSpacing(20)
 
             type_row = QtWidgets.QHBoxLayout()
-            self.type_label = QtWidgets.QLabel(self.ui_strings.source_type)
-            self.file_radio = QtWidgets.QRadioButton(self.ui_strings.single_file)
-            self.dir_radio = QtWidgets.QRadioButton(self.ui_strings.directory_zip)
-            self.file_radio.setChecked(True)
-            self.file_radio.toggled.connect(self._on_input_type_changed)
-            type_row.addWidget(self.type_label)
-            type_row.addSpacing(10)
-            type_row.addWidget(self.file_radio)
-            type_row.addWidget(self.dir_radio)
+            self.lbl_type = QtWidgets.QLabel()
+            self.lbl_type.setObjectName("H2")
+
+            self.rad_file = QtWidgets.QRadioButton()
+            self.rad_dir = QtWidgets.QRadioButton()
+            self.rad_file.setChecked(True)
+            self.rad_file.toggled.connect(self._on_src_type_changed)
+
+            type_row.addWidget(self.lbl_type)
+            type_row.addSpacing(20)
+            type_row.addWidget(self.rad_file)
+            type_row.addWidget(self.rad_dir)
             type_row.addStretch()
-            io_layout.addLayout(type_row)
+            io_lay.addLayout(type_row)
 
-            self.input_label = QtWidgets.QLabel()
-            self.input_label.setObjectName("H2")
-            self.input_picker = self._create_path_picker(self._browse_input)
-            io_layout.addWidget(self.input_label)
-            io_layout.addLayout(self.input_picker["layout"])
+            self.wdg_input = self._create_path_field("SOURCE PATH", self._browse_input)
+            io_lay.addLayout(self.wdg_input["layout"])
 
-            self.output_label = QtWidgets.QLabel()
-            self.output_label.setObjectName("H2")
-            self.output_picker = self._create_path_picker(self._browse_output)
-            io_layout.addWidget(self.output_label)
-            io_layout.addLayout(self.output_picker["layout"])
-
-            self.overwrite_checkbox = QtWidgets.QCheckBox(
-                self.ui_strings.overwrite_checkbox
+            self.wdg_output = self._create_path_field(
+                "DESTINATION", self._browse_output
             )
-            io_layout.addWidget(self.overwrite_checkbox)
+            io_lay.addLayout(self.wdg_output["layout"])
 
-            vbox.addWidget(io_group)
+            self.chk_overwrite = QtWidgets.QCheckBox()
+            io_lay.addWidget(self.chk_overwrite)
+            layout.addWidget(self.grp_io)
 
-            security_group = QtWidgets.QGroupBox()
-            security_group.setTitle(self.ui_strings.security_group)
-            sec_layout = QtWidgets.QVBoxLayout(security_group)
-            sec_layout.setSpacing(12)
+            # 3. Security
+            self.grp_sec = QtWidgets.QGroupBox()
+            sec_lay = QtWidgets.QVBoxLayout(self.grp_sec)
+            sec_lay.setSpacing(20)
 
-            self.mode_password_radio = QtWidgets.QRadioButton(
-                self.ui_strings.mode_standard
-            )
-            self.mode_pq_radio = QtWidgets.QRadioButton(self.ui_strings.mode_pq)
-            self.mode_password_radio.setChecked(True)
-            sec_layout.addWidget(self.mode_password_radio)
-            sec_layout.addWidget(self.mode_pq_radio)
+            algo_row = QtWidgets.QHBoxLayout()
+            self.rad_std = QtWidgets.QRadioButton()
+            self.rad_pq = QtWidgets.QRadioButton()
+            self.rad_std.setChecked(True)
+            algo_row.addWidget(self.rad_std)
+            algo_row.addWidget(self.rad_pq)
+            algo_row.addStretch()
+            sec_lay.addLayout(algo_row)
 
-            pass_row = QtWidgets.QVBoxLayout()
-            self.pass_label = QtWidgets.QLabel()
-            self.pass_label.setObjectName("H2")
-            pass_row.addWidget(self.pass_label)
+            self.lbl_pass = QtWidgets.QLabel()
+            self.lbl_pass.setObjectName("H2")
+            sec_lay.addWidget(self.lbl_pass)
 
             pass_field = QtWidgets.QHBoxLayout()
-            self.password_edit = QtWidgets.QLineEdit()
-            self.password_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
-            self.password_edit.setMinimumHeight(44)
-            self.show_pass_check = QtWidgets.QCheckBox()
-            self.show_pass_check.stateChanged.connect(self._toggle_password_visibility)
-            pass_field.addWidget(self.password_edit)
-            pass_field.addWidget(self.show_pass_check)
-            pass_row.addLayout(pass_field)
-            sec_layout.addLayout(pass_row)
+            pass_field.setSpacing(10)
 
-            self.decoy_group = QtWidgets.QGroupBox()
-            self.decoy_group.setTitle(self.ui_strings.decoy_group)
-            self.decoy_group.setCheckable(True)
-            self.decoy_group.setChecked(False)
-            self.decoy_group.toggled.connect(self._update_ui_state)
+            self.txt_pass = QtWidgets.QLineEdit()
+            self.txt_pass.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+            self.txt_pass.textChanged.connect(self._validate_encrypt_tab)
 
-            decoy_layout = QtWidgets.QVBoxLayout(self.decoy_group)
-            self.decoy_info_lbl = QtWidgets.QLabel(self.ui_strings.decoy_subtitle)
-            self.decoy_info_lbl.setWordWrap(True)
-            decoy_layout.addWidget(self.decoy_info_lbl)
+            self.btn_eye = QtWidgets.QPushButton("👁")
+            self.btn_eye.setFixedWidth(46)
+            self.btn_eye.setCheckable(True)
+            self.btn_eye.toggled.connect(lambda c: self._toggle_eye(self.txt_pass, c))
 
-            self.decoy_password_edit = QtWidgets.QLineEdit()
-            self.decoy_password_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
-            self.decoy_password_edit.setPlaceholderText(self.ui_strings.decoy_password)
-            self.decoy_password_edit.setMinimumHeight(44)
-            decoy_layout.addWidget(self.decoy_password_edit)
+            pass_field.addWidget(self.txt_pass)
+            pass_field.addWidget(self.btn_eye)
+            sec_lay.addLayout(pass_field)
 
-            self.decoy_picker_label = QtWidgets.QLabel(self.ui_strings.input_path)
-            self.decoy_picker_label.setObjectName("H2")
-            self.decoy_picker = self._create_path_picker(self._browse_decoy_input)
-            decoy_layout.addWidget(self.decoy_picker_label)
-            decoy_layout.addLayout(self.decoy_picker["layout"])
+            self.grp_decoy = QtWidgets.QGroupBox()
+            self.grp_decoy.setCheckable(True)
+            self.grp_decoy.setChecked(False)
+            self.grp_decoy.toggled.connect(self._validate_encrypt_tab)
 
-            sec_layout.addWidget(self.decoy_group)
-            vbox.addWidget(security_group)
+            dec_lay = QtWidgets.QVBoxLayout(self.grp_decoy)
+            dec_lay.setSpacing(16)
 
-            self.decrypt_opts_frame = QtWidgets.QGroupBox()
-            self.decrypt_opts_frame.setTitle(self.ui_strings.decrypt_target_label)
-            dec_layout = QtWidgets.QHBoxLayout(self.decrypt_opts_frame)
-            self.auto_vol_radio = QtWidgets.QRadioButton(self.ui_strings.auto_volume)
-            self.force_main_radio = QtWidgets.QRadioButton(self.ui_strings.force_main)
-            self.force_decoy_radio = QtWidgets.QRadioButton(self.ui_strings.force_decoy)
-            self.auto_vol_radio.setChecked(True)
-            dec_layout.addWidget(self.auto_vol_radio)
-            dec_layout.addWidget(self.force_main_radio)
-            dec_layout.addWidget(self.force_decoy_radio)
-            dec_layout.addStretch()
-            self.decrypt_opts_frame.setVisible(False)
-            vbox.addWidget(self.decrypt_opts_frame)
+            self.lbl_decoy_info = QtWidgets.QLabel()
+            self.lbl_decoy_info.setWordWrap(True)
+            self.lbl_decoy_info.setObjectName("Tip")
+            dec_lay.addWidget(self.lbl_decoy_info)
 
-            self.action_button = QtWidgets.QPushButton()
-            self.action_button.setObjectName("PrimaryButton")
-            self.action_button.clicked.connect(self._on_action_clicked)
-            vbox.addWidget(
-                self.action_button, alignment=QtCore.Qt.AlignmentFlag.AlignRight
-            )
+            self.txt_decoy_pass = QtWidgets.QLineEdit()
+            self.txt_decoy_pass.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+            dec_lay.addWidget(self.txt_decoy_pass)
+
+            self.wdg_decoy = self._create_path_field("HIDDEN DATA", self._browse_decoy)
+            dec_lay.addLayout(self.wdg_decoy["layout"])
+
+            sec_lay.addWidget(self.grp_decoy)
+
+            self.frm_dec_opts = QtWidgets.QWidget()
+            do_lay = QtWidgets.QHBoxLayout(self.frm_dec_opts)
+            do_lay.setContentsMargins(0, 10, 0, 0)
+
+            lbl_targ = QtWidgets.QLabel("TARGET VOLUME:")
+            lbl_targ.setObjectName("H2")
+
+            self.rad_d_auto = QtWidgets.QRadioButton()
+            self.rad_d_main = QtWidgets.QRadioButton()
+            self.rad_d_decoy = QtWidgets.QRadioButton()
+            self.rad_d_auto.setChecked(True)
+
+            do_lay.addWidget(lbl_targ)
+            do_lay.addSpacing(15)
+            do_lay.addWidget(self.rad_d_auto)
+            do_lay.addWidget(self.rad_d_main)
+            do_lay.addWidget(self.rad_d_decoy)
+            do_lay.addStretch()
+            self.frm_dec_opts.setVisible(False)
+            sec_lay.addWidget(self.frm_dec_opts)
+
+            layout.addWidget(self.grp_sec)
+
+            layout.addSpacing(10)
+            self.btn_action = QtWidgets.QPushButton("INITIALIZE SYSTEM")
+            self.btn_action.setObjectName("PrimaryButton")
+            self.btn_action.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            self.btn_action.clicked.connect(self._run_action)
+            layout.addWidget(self.btn_action)
+            layout.addStretch()
+
+            self.tabs.addTab(page, "")
+
+        # ---------- INSPECT TAB ----------
 
         def _build_inspect_tab(self) -> None:
-            tab = QtWidgets.QWidget()
-            tab.setObjectName("ContentWidget")
-            self.tabs.addTab(tab, "")
+            page = QtWidgets.QWidget()
+            page.setObjectName("Content")
+            lay = QtWidgets.QVBoxLayout(page)
+            lay.setContentsMargins(0, 20, 0, 20)
+            lay.setSpacing(20)
 
-            vbox = QtWidgets.QVBoxLayout(tab)
-            vbox.setContentsMargins(6, 12, 6, 12)
-            vbox.setSpacing(14)
+            box = QtWidgets.QGroupBox()
+            box_l = QtWidgets.QVBoxLayout(box)
+            box_l.setSpacing(16)
 
-            insp_group = QtWidgets.QGroupBox()
-            insp_group.setTitle(self.ui_strings.inspect_group)
-            insp_layout = QtWidgets.QVBoxLayout(insp_group)
-            insp_layout.setSpacing(10)
-
-            self.inspect_picker = self._create_path_picker(self._browse_inspect_input)
-            insp_layout.addWidget(
-                QtWidgets.QLabel("📄 " + self.ui_strings.inspect_select_ph)
+            self.wdg_insp = self._create_path_field(
+                "CONTAINER (.zil)", self._browse_inspect
             )
-            insp_layout.addLayout(self.inspect_picker["layout"])
+            box_l.addLayout(self.wdg_insp["layout"])
 
-            self.inspect_auth_check = QtWidgets.QCheckBox(self.ui_strings.inspect_verify)
-            self.inspect_auth_check.stateChanged.connect(self._toggle_inspect_password)
-            insp_layout.addWidget(self.inspect_auth_check)
+            row = QtWidgets.QHBoxLayout()
+            self.chk_insp_auth = QtWidgets.QCheckBox()
+            self.chk_insp_auth.stateChanged.connect(self._toggle_insp_auth)
+            row.addWidget(self.chk_insp_auth)
 
-            self.inspect_pass_edit = QtWidgets.QLineEdit()
-            self.inspect_pass_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
-            self.inspect_pass_edit.setEnabled(False)
-            self.inspect_pass_edit.setPlaceholderText(
-                self.ui_strings.inspect_password_ph
-            )
-            self.inspect_pass_edit.setMinimumHeight(44)
-            insp_layout.addWidget(self.inspect_pass_edit)
+            self.txt_insp_pass = QtWidgets.QLineEdit()
+            self.txt_insp_pass.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+            self.txt_insp_pass.setEnabled(False)
+            row.addWidget(self.txt_insp_pass)
 
-            self.inspect_btn = QtWidgets.QPushButton(self.ui_strings.inspect_button)
-            self.inspect_btn.clicked.connect(self._handle_inspect)
-            insp_layout.addWidget(
-                self.inspect_btn, alignment=QtCore.Qt.AlignmentFlag.AlignRight
-            )
+            self.btn_insp = QtWidgets.QPushButton()
+            self.btn_insp.clicked.connect(self._run_inspect)
+            row.addWidget(self.btn_insp)
+            box_l.addLayout(row)
 
-            self.inspect_output = QtWidgets.QPlainTextEdit()
-            self.inspect_output.setReadOnly(True)
-            self.inspect_output.setMinimumHeight(200)
-            insp_layout.addWidget(self.inspect_output)
+            lay.addWidget(box)
 
-            vbox.addWidget(insp_group)
+            self.txt_log = QtWidgets.QPlainTextEdit()
+            self.txt_log.setReadOnly(True)
+            self.txt_log.setPlaceholderText("> Waiting for input...")
+            lay.addWidget(self.txt_log)
 
-        def _build_footer(self, parent_layout: QtWidgets.QVBoxLayout) -> None:
-            footer = QtWidgets.QWidget()
-            f_layout = QtWidgets.QVBoxLayout(footer)
-            f_layout.setContentsMargins(0, 6, 0, 0)
-            f_layout.setSpacing(8)
+            self.tabs.addTab(page, "")
 
-            self.progress_bar = QtWidgets.QProgressBar()
-            self.progress_bar.setVisible(False)
-            f_layout.addWidget(self.progress_bar)
+        # ---------- FOOTER ----------
 
-            status_row = QtWidgets.QHBoxLayout()
-            self.status_icon = QtWidgets.QLabel("●")
-            self.status_icon.setObjectName("StatusIcon")
-            self.status_lbl = QtWidgets.QLabel(self.ui_strings.status_ready)
-            self.open_folder_btn = QtWidgets.QPushButton(self.ui_strings.open_folder)
-            self.open_folder_btn.setObjectName("GhostButton")
-            self.open_folder_btn.clicked.connect(self._open_output_folder)
-            self.open_folder_btn.setVisible(False)
+        def _build_footer(self) -> None:
+            foot = QtWidgets.QWidget()
+            lay = QtWidgets.QHBoxLayout(foot)
+            lay.setContentsMargins(0, 0, 0, 0)
 
-            status_row.addWidget(self.status_icon)
-            status_row.addSpacing(6)
-            status_row.addWidget(self.status_lbl)
-            status_row.addStretch()
-            status_row.addWidget(self.open_folder_btn)
-            f_layout.addLayout(status_row)
+            self.lbl_dot = QtWidgets.QLabel("●")
+            self.lbl_dot.setStyleSheet(f"color: {THEME['success']}; font-size: 16px;")
+            self.lbl_stat = QtWidgets.QLabel("SYSTEM READY")
+            self.lbl_stat.setObjectName("H2")
 
-            parent_layout.addWidget(footer)
+            self.prog = QtWidgets.QProgressBar()
+            self.prog.setFixedWidth(200)
+            self.prog.setRange(0, 0)
+            self.prog.setTextVisible(False)
+            self.prog.setVisible(False)
 
-        def _create_path_picker(self, slot: Callable[[], None]) -> dict[str, Any]:
-            layout = QtWidgets.QHBoxLayout()
-            layout.setSpacing(6)
+            self.btn_open = QtWidgets.QPushButton("REVEAL FILE")
+            self.btn_open.setObjectName("GhostButton")
+            self.btn_open.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            self.btn_open.clicked.connect(self._open_result)
+            self.btn_open.setVisible(False)
 
-            edit = QtWidgets.QLineEdit()
-            edit.setMinimumHeight(44)
-            edit.textChanged.connect(self._on_input_changed)
+            lay.addWidget(self.lbl_dot)
+            lay.addSpacing(8)
+            lay.addWidget(self.lbl_stat)
+            lay.addSpacing(16)
+            lay.addWidget(self.prog)
+            lay.addStretch()
+            lay.addWidget(self.btn_open)
 
-            btn = QtWidgets.QPushButton(self.ui_strings.browse)
-            btn.setMinimumHeight(44)
-            btn.setFixedWidth(96)
-            btn.clicked.connect(slot)
+            self.main_layout.addWidget(foot)
 
-            layout.addWidget(edit)
-            layout.addWidget(btn)
-            return {"layout": layout, "edit": edit, "btn": btn}
+        # ---------- HELPERS ----------
 
-        def _on_lang_changed(self, index: int) -> None:
-            lang_value = self.lang_combo.itemData(index) or "en"
-            self._lang = cast(Lang, lang_value)
-            self.ui_strings = get_strings(self._lang)
-            self._retranslate_ui()
-            self._update_defaults()
+        def _create_path_field(
+            self, label: str, browse_cb: Callable[[], None]
+        ) -> dict[str, Any]:
+            v = QtWidgets.QVBoxLayout()
+            v.setSpacing(6)
+
+            lbl = QtWidgets.QLabel(label)
+            lbl.setObjectName("H2")
+            v.addWidget(lbl)
+
+            h = QtWidgets.QHBoxLayout()
+            h.setSpacing(10)
+
+            txt = QtWidgets.QLineEdit()
+            txt.textChanged.connect(self._validate_encrypt_tab)
+
+            btn = QtWidgets.QPushButton("BROWSE")
+            btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(browse_cb)
+
+            h.addWidget(txt)
+            h.addWidget(btn)
+            v.addLayout(h)
+            return {"layout": v, "txt": txt, "btn": btn, "lbl": lbl}
+
+        # ---------- UI LOGIC ----------
 
         def _retranslate_ui(self) -> None:
-            self.setWindowTitle(f"{self.ui_strings.app_title} v{__version__}")
-            self.title_lbl.setText(self.ui_strings.app_title)
-            self.subtitle_lbl.setText(self.ui_strings.subtitle)
-            self.about_btn.setText(self.ui_strings.about)
-            self.tabs.setTabText(0, self.ui_strings.tab_encrypt)
-            self.tabs.setTabText(1, self.ui_strings.tab_inspect)
+            s = self.ui_strings
 
-            self.encrypt_radio.setText(self.ui_strings.encrypt)
-            self.decrypt_radio.setText(self.ui_strings.decrypt)
-            self.type_label.setText("📄 " + self.ui_strings.source_type)
-            self.file_radio.setText(self.ui_strings.single_file)
-            self.dir_radio.setText("📂 " + self.ui_strings.directory_zip)
+            self.btn_about.setText("?")
+            self.tabs.setTabText(0, s.tab_encrypt.upper())
+            self.tabs.setTabText(1, s.tab_inspect.upper())
 
-            self.input_label.setText("📄 " + self.ui_strings.input_path)
-            self.output_label.setText("💾 " + self.ui_strings.output_path)
-            self.overwrite_checkbox.setText(self.ui_strings.overwrite_checkbox)
+            self.grp_action.setTitle(s.action_label.upper())
+            self.rad_enc.setText(s.encrypt)
+            self.rad_dec.setText(s.decrypt)
 
-            self.mode_password_radio.setText(self.ui_strings.mode_standard)
-            self.mode_pq_radio.setText(self.ui_strings.mode_pq)
-            self.pass_label.setText("🔒 " + self.ui_strings.password_ph)
-            self.show_pass_check.setText("👁️ " + self.ui_strings.show_password)
+            self.grp_io.setTitle(s.input_output_group.upper())
+            self.lbl_type.setText(s.source_type.upper())
+            self.rad_file.setText(s.single_file)
+            self.rad_dir.setText(s.directory_zip)
 
-            self.decoy_group.setTitle(self.ui_strings.decoy_group)
-            self.decoy_info_lbl.setText(self.ui_strings.decoy_subtitle)
-            self.decoy_password_edit.setPlaceholderText(self.ui_strings.decoy_password)
-            self.decoy_picker_label.setText("📄 " + self.ui_strings.input_path)
-            self.decoy_picker["btn"].setText(self.ui_strings.browse)
+            self.wdg_input["lbl"].setText(s.input_path.upper())
+            self.wdg_output["lbl"].setText(s.output_path.upper())
+            self.chk_overwrite.setText(s.overwrite_checkbox)
 
-            self.decrypt_opts_frame.setTitle(self.ui_strings.decrypt_target_label)
-            self.auto_vol_radio.setText(self.ui_strings.auto_volume)
-            self.force_main_radio.setText(self.ui_strings.force_main)
-            self.force_decoy_radio.setText(self.ui_strings.force_decoy)
+            self.grp_sec.setTitle(s.security_group.upper())
+            self.rad_std.setText(s.mode_standard)
+            self.rad_pq.setText(s.mode_pq)
+            self.lbl_pass.setText(s.password_ph.upper())
 
-            self.action_button.setText(
-                self.ui_strings.start_encrypt
-                if self.encrypt_radio.isChecked()
-                else self.ui_strings.start_decrypt
-            )
+            self.grp_decoy.setTitle(s.decoy_group.upper())
+            self.lbl_decoy_info.setText(s.decoy_subtitle)
+            self.txt_decoy_pass.setPlaceholderText(s.decoy_password)
+            self.wdg_decoy["lbl"].setText(s.input_path.upper())
 
-            self.inspect_btn.setText(self.ui_strings.inspect_button)
-            self.inspect_auth_check.setText(self.ui_strings.inspect_verify)
-            self.inspect_pass_edit.setPlaceholderText(
-                self.ui_strings.inspect_password_ph
-            )
-            self.inspect_picker["btn"].setText(self.ui_strings.browse)
+            self.rad_d_auto.setText(s.auto_volume)
+            self.rad_d_main.setText(s.force_main)
+            self.rad_d_decoy.setText(s.force_decoy)
 
-            self.open_folder_btn.setText(self.ui_strings.open_folder)
-            self._update_status_text()
+            self.chk_insp_auth.setText(s.inspect_verify)
+            self.txt_insp_pass.setPlaceholderText(s.inspect_password_ph)
+            self.btn_insp.setText(s.inspect_button.upper())
+            self.btn_open.setText(s.open_folder.upper())
 
-        def _update_status_text(self) -> None:
-            if self._status_state == "processing":
-                self.status_lbl.setText(self.ui_strings.status_processing)
-                self.status_icon.setStyleSheet(f"color: {ACCENT};")
-            elif self._status_state == "error":
-                self.status_lbl.setText(self.ui_strings.status_error)
-                self.status_icon.setStyleSheet(f"color: {ERROR_COLOR};")
-            else:
-                self.status_lbl.setText(self.ui_strings.status_ready)
-                self.status_icon.setStyleSheet(f"color: {SUCCESS_COLOR};")
-
-        def _on_op_mode_changed(self) -> None:
-            is_encrypt = self.encrypt_radio.isChecked()
-            self.action_button.setText(
-                self.ui_strings.start_encrypt
-                if is_encrypt
-                else self.ui_strings.start_decrypt
-            )
-            self.decoy_group.setVisible(is_encrypt)
-            self.decrypt_opts_frame.setVisible(not is_encrypt)
-            if not is_encrypt:
-                self.file_radio.setChecked(True)
-                self.dir_radio.setEnabled(False)
-            else:
-                self.dir_radio.setEnabled(True)
-            self._update_defaults()
-
-        def _on_input_type_changed(self) -> None:
-            self._update_defaults()
+            self._update_ui_state()
 
         def _update_ui_state(self) -> None:
-            has_decoy = self.decoy_group.isChecked()
-            self.decoy_password_edit.setEnabled(has_decoy)
-            self.decoy_picker["edit"].setEnabled(has_decoy)
-            self.decoy_picker["btn"].setEnabled(has_decoy)
+            is_enc = self.rad_enc.isChecked()
 
-        def _toggle_password_visibility(self, state: int) -> None:
-            checked = state == QtCore.Qt.CheckState.Checked.value
+            if is_enc:
+                c1, c2 = THEME["accent_blue"], THEME["accent_cyan"]
+                text = self.ui_strings.start_encrypt
+                self.grp_decoy.setVisible(True)
+                self.frm_dec_opts.setVisible(False)
+            else:
+                c1, c2 = THEME["accent_purp"], THEME["accent_pink"]
+                text = self.ui_strings.start_decrypt
+                self.grp_decoy.setVisible(False)
+                self.frm_dec_opts.setVisible(True)
+
+            grad = (
+                f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {c1}, stop:1 {c2})"
+            )
+
+            self.btn_action.setText(text.upper())
+            self.btn_action.setStyleSheet(f"""
+                QPushButton#PrimaryButton {{
+                    background: {grad};
+                }}
+                QPushButton#PrimaryButton:hover {{
+                    border: 1px solid white;
+                }}
+            """)
+
+            grp_style = f"""
+            QGroupBox::title {{
+                color: {c1};
+            }}
+            QRadioButton::indicator:checked {{
+                background-color: {c1};
+                border-color: {c1};
+            }}
+            """
+            self.grp_action.setStyleSheet(grp_style)
+            self.grp_sec.setStyleSheet(grp_style)
+
+            if not is_enc:
+                self.rad_file.setChecked(True)
+                self.rad_dir.setEnabled(False)
+            else:
+                self.rad_dir.setEnabled(True)
+
+            self._auto_output()
+
+        def _validate_encrypt_tab(self) -> None:
+            s = self.wdg_input["txt"].text().strip()
+            if s and not self.wdg_output["txt"].text().strip():
+                self._auto_output()
+
+            has_pass = bool(self.txt_pass.text())
+            self.btn_action.setEnabled(has_pass)
+
+        def _auto_output(self) -> None:
+            raw = self.wdg_input["txt"].text().strip()
+            if not raw:
+                return
+            p = Path(raw)
+            is_enc = self.rad_enc.isChecked()
+
+            try:
+                if is_enc:
+                    cand = p.with_name(p.name + ".zil")
+                else:
+                    if p.suffix == ".zil":
+                        stem = p.stem
+                        if "." not in stem:
+                            stem += ".decrypted"
+                        cand = p.with_name(stem)
+                    else:
+                        cand = p.with_name(p.name + ".decrypted")
+
+                self.wdg_output["txt"].setPlaceholderText(str(cand))
+            except Exception:
+                pass
+
+        # ---------- BROWSE ACTIONS ----------
+
+        def _browse_input(self) -> None:
+            if self.rad_enc.isChecked() and self.rad_dir.isChecked():
+                res = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Folder")
+            else:
+                res, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Select File")
+
+            if res:
+                self.wdg_input["txt"].setText(res)
+                self._auto_output()
+
+        def _browse_output(self) -> None:
+            if self.rad_enc.isChecked():
+                res, _ = QtWidgets.QFileDialog.getSaveFileName(
+                    self, "Save Container", filter="Zilant (*.zil)"
+                )
+            else:
+                res = QtWidgets.QFileDialog.getExistingDirectory(
+                    self, "Select Destination"
+                )
+
+            if res:
+                self.wdg_output["txt"].setText(res)
+
+        def _browse_decoy(self) -> None:
+            if self.rad_dir.isChecked():
+                res = QtWidgets.QFileDialog.getExistingDirectory(
+                    self, "Decoy Data Folder"
+                )
+            else:
+                res, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Decoy Data File")
+            if res:
+                self.wdg_decoy["txt"].setText(res)
+
+        def _browse_inspect(self) -> None:
+            res, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self, "Select Container", filter="Zilant (*.zil)"
+            )
+            if res:
+                self.wdg_insp["txt"].setText(res)
+
+        # ---------- SMALL UI HELPERS ----------
+
+        def _on_mode_switched(self) -> None:
+            self._update_ui_state()
+
+        def _on_src_type_changed(self) -> None:
+            self._validate_encrypt_tab()
+
+        def _toggle_eye(self, line_edit: QtWidgets.QLineEdit, checked: bool) -> None:
             mode = (
                 QtWidgets.QLineEdit.EchoMode.Normal
                 if checked
                 else QtWidgets.QLineEdit.EchoMode.Password
             )
-            self.password_edit.setEchoMode(mode)
+            line_edit.setEchoMode(mode)
 
-        def _toggle_inspect_password(self, state: int) -> None:
-            checked = state == QtCore.Qt.CheckState.Checked.value
-            self.inspect_pass_edit.setEnabled(checked)
-            if not checked:
-                self.inspect_pass_edit.clear()
+        def _toggle_insp_auth(self, state: int) -> None:
+            on = state == QtCore.Qt.CheckState.Checked.value
+            self.txt_insp_pass.setEnabled(on)
+            if not on:
+                self.txt_insp_pass.clear()
 
-        def _browse_input(self) -> None:
-            if self.encrypt_radio.isChecked() and self.dir_radio.isChecked():
-                path = QtWidgets.QFileDialog.getExistingDirectory(
-                    self, self.ui_strings.dialog_select_folder_encrypt
-                )
-            else:
-                path, _ = QtWidgets.QFileDialog.getOpenFileName(
-                    self, self.ui_strings.dialog_select_file
-                )
-            if path:
-                self.input_picker["edit"].setText(path)
+        def _on_lang_changed(self, index: int) -> None:
+            code = self.combo_lang.itemData(index)
+            self._lang = cast(Lang, code)
+            self.ui_strings = get_strings(self._lang)
+            self._retranslate_ui()
 
-        def _browse_output(self) -> None:
-            if self.encrypt_radio.isChecked():
-                path, _ = QtWidgets.QFileDialog.getSaveFileName(
-                    self,
-                    self.ui_strings.dialog_save_container,
-                    filter="Zilant Container (*.zil)",
-                )
-            else:
-                path = QtWidgets.QFileDialog.getExistingDirectory(
-                    self, self.ui_strings.dialog_select_output_dir
-                )
-            if path:
-                self.output_picker["edit"].setText(path)
+        # ---------- BUSINESS LOGIC ----------
 
-        def _browse_decoy_input(self) -> None:
-            if self.dir_radio.isChecked():
-                path = QtWidgets.QFileDialog.getExistingDirectory(
-                    self, self.ui_strings.dialog_select_decoy_folder
-                )
-            else:
-                path, _ = QtWidgets.QFileDialog.getOpenFileName(
-                    self, self.ui_strings.dialog_select_decoy_file
-                )
-            if path:
-                self.decoy_picker["edit"].setText(path)
-
-        def _browse_inspect_input(self) -> None:
-            path, _ = QtWidgets.QFileDialog.getOpenFileName(
-                self,
-                self.ui_strings.dialog_select_container,
-                filter="Zilant Container (*.zil)",
+        def _run_action(self) -> None:
+            s_raw = self.wdg_input["txt"].text().strip()
+            d_raw = (
+                self.wdg_output["txt"].text().strip()
+                or self.wdg_output["txt"].placeholderText()
             )
-            if path:
-                self.inspect_picker["edit"].setText(path)
+            pwd = self.txt_pass.text()
 
-        def _on_input_changed(self) -> None:
-            self._update_defaults()
-
-        def _suggest_output_name(self, input_path: Path, is_encrypt: bool) -> str:
-            if is_encrypt:
-                return input_path.name + ".zil"
-
-            # Smart decryption naming
-            if input_path.name.endswith(".zil"):
-                candidate = input_path.name[: -len(".zil")]
-                # If result has no extension (e.g. 'kek1'), append .decrypted to avoid confusion
-                if "." not in candidate:
-                    return candidate + ".decrypted"
-                return candidate
-
-            return input_path.name + ".decrypted"
-
-        def _suggest_output_path(self, input_path: Path, is_encrypt: bool) -> Path:
-            return input_path.with_name(
-                self._suggest_output_name(input_path, is_encrypt)
-            )
-
-        def _resolve_output_path(
-            self, input_path: Path, out_text: str | None, is_encrypt: bool
-        ) -> Path:
-            base_name = self._suggest_output_name(input_path, is_encrypt)
-            if out_text:
-                candidate = Path(out_text)
-                # If it exists as a dir, or looks like a dir path (ends in slash)
-                if (candidate.exists() and candidate.is_dir()) or (
-                    not candidate.suffix and str(out_text).endswith(("/", "\\"))
-                ):
-                    return candidate / base_name
-                # If parent exists and it's not a dir, assume it's a full file path
-                return candidate
-            return self._suggest_output_path(input_path, is_encrypt)
-
-        def _update_defaults(self) -> None:
-            raw_input = self.input_picker["edit"].text().strip()
-            if not raw_input:
+            if not s_raw or not Path(s_raw).exists():
+                self._msg("Missing Input", self.ui_strings.input_missing, True)
                 return
-            in_path = Path(raw_input)
-            target = self._suggest_output_path(
-                in_path, self.encrypt_radio.isChecked()
-            )
-            if not self.output_picker["edit"].text().strip():
-                self.output_picker["edit"].setPlaceholderText(str(target))
-
-        def _on_action_clicked(self) -> None:
-            is_encrypt = self.encrypt_radio.isChecked()
-            in_path_str = self.input_picker["edit"].text().strip()
-            out_raw = self.output_picker["edit"].text().strip()
-            out_placeholder = self.output_picker["edit"].placeholderText().strip()
-            password = self.password_edit.text()
-
-            if not in_path_str or not Path(in_path_str).exists():
-                self._show_error(self.ui_strings.input_missing)
-                return
-            if not password:
-                self._show_error(self.ui_strings.password_required)
+            if not d_raw:
+                self._msg("Missing Output", "Destination path required.", True)
                 return
 
-            resolved_out = self._resolve_output_path(
-                Path(in_path_str), out_raw or out_placeholder, is_encrypt
-            )
-            self.output_picker["edit"].setText(str(resolved_out))
+            src = Path(s_raw).resolve()
+            dst = Path(d_raw).resolve()
 
-            overwrite = self.overwrite_checkbox.isChecked()
-            if resolved_out.exists() and resolved_out.is_file() and not overwrite:
-                res = QtWidgets.QMessageBox.question(
-                    self,
-                    self.ui_strings.overwrite_prompt_title,
-                    self.ui_strings.overwrite_prompt_body.format(path=resolved_out),
+            if src == dst:
+                self._msg(
+                    "Collision", "Source and Destination cannot be the same.", True
                 )
-                if res != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+
+            is_enc = self.rad_enc.isChecked()
+            if is_enc and dst.exists() and not self.chk_overwrite.isChecked():
+                ask = QtWidgets.QMessageBox.question(
+                    self, "Overwrite?", f"File exists:\n{dst.name}\n\nOverwrite it?"
+                )
+                if ask != QtWidgets.QMessageBox.StandardButton.Yes:
                     return
-                overwrite = True
 
-            mode = (
-                normalize_mode("pq-hybrid")
-                if self.mode_pq_radio.isChecked()
-                else normalize_mode("password")
+            mode = normalize_mode(
+                "pq-hybrid" if self.rad_pq.isChecked() else "password"
             )
-            self._set_busy(True)
 
-            def enc_task() -> None:
-                if self.decoy_group.isChecked():
-                    d_pass = self.decoy_password_edit.text()
-                    if not d_pass:
-                        raise InvalidPassword(self.ui_strings.decoy_password_required)
-                    d_in = self.decoy_picker["edit"].text().strip()
-                    encrypt_with_decoy(
-                        Path(in_path_str),
-                        Path(d_in) if d_in else None,
-                        resolved_out,
-                        main_password=password,
-                        decoy_password=d_pass,
-                        mode=mode,
-                        overwrite=overwrite,
-                    )
-                else:
-                    encrypt_file(
-                        Path(in_path_str),
-                        resolved_out,
-                        password,
-                        mode=mode,
-                        overwrite=overwrite,
-                    )
+            if is_enc:
+                if self.grp_decoy.isChecked():
+                    dp = self.txt_decoy_pass.text()
+                    dpath = self.wdg_decoy["txt"].text().strip()
+                    if not dp:
+                        self._msg("Error", "Decoy password missing.", True)
+                        return
+                    if not dpath:
+                        self._msg("Error", "Decoy data missing.", True)
+                        return
 
-            def dec_task() -> None:
-                vol: Literal["main", "decoy"] | None = None
-                if self.force_main_radio.isChecked():
-                    vol = "main"
-                elif self.force_decoy_radio.isChecked():
-                    vol = "decoy"
+                    if Path(dpath).resolve() == src:
+                        self._msg("Error", "Decoy source same as Main.", True)
+                        return
 
-                if vol:
-                    decrypt_file(
-                        Path(in_path_str),
-                        resolved_out,
-                        password,
-                        volume_selector=vol,
-                        mode=mode,
-                        overwrite=overwrite,
-                    )
-                else:
-                    if _DECRYPT_AUTO_SUPPORTS_OVERWRITE:
-                        decrypt_auto_volume(
-                            Path(in_path_str),
-                            resolved_out,
-                            password=password,
+                    def task_enc_decoy() -> None:
+                        encrypt_with_decoy(
+                            src,
+                            Path(dpath),
+                            dst,
+                            main_password=pwd,
+                            decoy_password=dp,
                             mode=mode,
-                            overwrite=overwrite,
+                            overwrite=True,
+                        )
+
+                    worker_task: Callable[[], Any] = task_enc_decoy
+                else:
+
+                    def task_enc_std() -> None:
+                        encrypt_file(src, dst, password=pwd, mode=mode, overwrite=True)
+
+                    worker_task = task_enc_std
+            else:
+                v_sel: Literal["main", "decoy"] | None = None
+                if self.rad_d_main.isChecked():
+                    v_sel = "main"
+                elif self.rad_d_decoy.isChecked():
+                    v_sel = "decoy"
+
+                ow = self.chk_overwrite.isChecked()
+
+                def task_dec() -> None:
+                    if v_sel:
+                        decrypt_file(
+                            src,
+                            dst,
+                            password=pwd,
+                            volume_selector=v_sel,
+                            mode=mode,
+                            overwrite=ow,
                         )
                     else:
-                        decrypt_auto_volume(
-                            Path(in_path_str),
-                            Path(resolved_out),
-                            password=password,
-                            mode=mode,
-                        )
+                        if _DECRYPT_AUTO_SUPPORTS_OVERWRITE:
+                            decrypt_auto_volume(
+                                src, dst, password=pwd, mode=mode, overwrite=ow
+                            )
+                        else:
+                            decrypt_auto_volume(src, dst, password=pwd, mode=mode)
 
-            self._start_worker(enc_task if is_encrypt else dec_task, resolved_out)
+                worker_task = task_dec
 
-        def _handle_inspect(self) -> None:
-            p_str = self.inspect_picker["edit"].text().strip()
-            if not p_str or not Path(p_str).exists():
-                self._show_error(self.ui_strings.container_not_found)
+            self._start_worker(worker_task, dst if is_enc or not dst.is_dir() else dst)
+
+        def _run_inspect(self) -> None:
+            raw = self.wdg_insp["txt"].text().strip()
+            if not raw or not Path(raw).exists():
+                self._msg("Error", self.ui_strings.container_not_found, True)
                 return
 
             pwd = (
-                self.inspect_pass_edit.text()
-                if self.inspect_auth_check.isChecked()
+                self.txt_insp_pass.text()
+                if self.chk_insp_auth.isChecked()
                 else None
             )
+            p = Path(raw)
+
+            def task_insp() -> None:
+                ov, val = check_container(p, password=pwd, volume_selector="all")
+                self._temp_report = _format_report(
+                    p, ov, val, ov.pq_available, self.ui_strings
+                )
+
+            self._start_worker(task_insp, None)
+
+        def _start_worker(
+            self, func: Callable[[], Any], result_path: Path | None
+        ) -> None:
             self._set_busy(True)
-
-            def logic() -> None:
-                overview, validated = check_container(
-                    Path(p_str), password=pwd, volume_selector="all"
-                )
-                self._temp_report = _format_overview_report(
-                    Path(p_str),
-                    overview,
-                    validated,
-                    overview.pq_available,
-                    self.ui_strings,
-                )
-
-            self._start_worker(logic, None)
-
-        def _start_worker(self, func: Callable[[], None], target: Path | None) -> None:
-            self.progress_bar.setRange(0, 0)
-            self.progress_bar.setVisible(True)
-            self._status_state = "processing"
-            self._update_status_text()
-            self.open_folder_btn.setVisible(False)
-            self._output_path = target
+            self._output_path = result_path
 
             self._worker = TaskWorker(func, self.ui_strings)
-            self._worker.finished_success.connect(
-                lambda msg: self._on_worker_finished(True, msg)
-            )
-            self._worker.finished_error.connect(
-                lambda msg: self._on_worker_finished(False, msg)
-            )
+            self._worker.finished_success.connect(self._on_done)
+            self._worker.finished_error.connect(self._on_fail)
             self._worker.start()
 
-        def _on_worker_finished(self, success: bool, message: str) -> None:
+        def _on_done(self, msg: str) -> None:
             self._set_busy(False)
-            self.progress_bar.setVisible(False)
+            self.lbl_dot.setStyleSheet(f"color: {THEME['success']}")
+            self.lbl_stat.setText("COMPLETE")
 
-            if success:
-                self._status_state = "ready"
-                if self._output_path:
-                    self.open_folder_btn.setVisible(True)
-                if self._temp_report:
-                    self.inspect_output.setPlainText(self._temp_report)
-                    self._temp_report = None
-                else:
-                    self.password_edit.clear()
-                    self.decoy_password_edit.clear()
-                    self._show_info(self.ui_strings.success_title, message)
+            if self._temp_report:
+                self.txt_log.setPlainText(self._temp_report)
+                self.tabs.setCurrentIndex(1)
+                self._temp_report = None
             else:
-                self._status_state = "error"
-                self.password_edit.clear()
-                self.decoy_password_edit.clear()
-                self._show_error(message)
+                self.txt_pass.clear()
+                self.txt_decoy_pass.clear()
+                QtWidgets.QMessageBox.information(self, "Success", msg)
 
-            self._update_status_text()
+            if self._output_path and self._output_path.exists():
+                self.btn_open.setVisible(True)
+
+        def _on_fail(self, msg: str) -> None:
+            self._set_busy(False)
+            self.lbl_dot.setStyleSheet(f"color: {THEME['error']}")
+            self.lbl_stat.setText("ERROR")
+            self._msg("Operation Failed", msg, True)
 
         def _set_busy(self, busy: bool) -> None:
             self.tabs.setEnabled(not busy)
+            self.btn_action.setEnabled(not busy)
+            self.prog.setVisible(busy)
+            self.btn_open.setVisible(False)
+
             if busy:
-                self.setCursor(QtCore.Qt.CursorShape.BusyCursor)
+                self.lbl_dot.setStyleSheet(f"color: {THEME['accent_blue']}")
+                self.lbl_stat.setText("PROCESSING...")
             else:
-                self.unsetCursor()
+                self.lbl_stat.setText("READY")
 
-        def _open_output_folder(self) -> None:
-            if self._output_path and self._output_path.exists():
-                self._reveal_in_file_manager(self._output_path)
-
-        def _reveal_in_file_manager(self, path: Path) -> None:
-            """Open file manager and select the file."""
-            if not path.exists():
+        def _open_result(self) -> None:
+            if not self._output_path:
                 return
-
-            path_str = str(path.resolve())
-            system_name = platform.system()
-
-            try:
-                if system_name == "Windows":
-                    subprocess.run(["explorer", "/select,", path_str])
-                elif system_name == "Darwin":  # macOS
-                    subprocess.run(["open", "-R", path_str])
-                else:  # Linux and others
-                    # Try dbus/freedesktop standard first
-                    try:
-                        subprocess.run(["xdg-open", str(path.parent)])
-                    except Exception:
-                        pass
-            except Exception:
-                # Fallback just open the parent folder
-                QtGui.QDesktopServices.openUrl(
-                    QtCore.QUrl.fromLocalFile(str(path.parent))
-                )
-
-        def _show_error(self, msg: str) -> None:
-            QtWidgets.QMessageBox.critical(self, self.ui_strings.error_title, msg)
-
-        def _show_info(self, title: str, msg: str) -> None:
-            QtWidgets.QMessageBox.information(self, title, msg)
-
-        def _show_about_dialog(self) -> None:
-            QtWidgets.QMessageBox.about(
-                self,
-                self.ui_strings.about_title,
-                self.ui_strings.about_body.format(version=__version__),
+            target = (
+                self._output_path.parent
+                if self._output_path.is_file()
+                else self._output_path
             )
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(target)))
 
+        def _msg(self, title: str, text: str, is_err: bool = False) -> None:
+            icon = (
+                QtWidgets.QMessageBox.Icon.Critical
+                if is_err
+                else QtWidgets.QMessageBox.Icon.Information
+            )
+            dlg = QtWidgets.QMessageBox(self)
+            dlg.setWindowTitle(title)
+            dlg.setText(text)
+            dlg.setIcon(icon)
+            dlg.exec()
 
-def create_app() -> Any:
-    if not QT_AVAILABLE:
-        raise ImportError("PySide6 not installed.")
-    app = QtWidgets.QApplication(sys.argv)
-    app.setStyle("Fusion")
-    window = ZilantWindow()
-    window.show()
-    app._zilant_window = window  # type: ignore[attr-defined]
-    return app
+        def _show_about(self) -> None:
+            self._msg(
+                "System Info",
+                f"Zilant Encrypt Core v{__version__}\n\n"
+                "Secure containerization featuring:\n"
+                "- AES-256-GCM + Argon2id\n"
+                "- Kyber768 (Post-Quantum)\n"
+                "- Plausible Deniability Routing",
+            )
 
 
 def main() -> None:
     if not QT_AVAILABLE:
-        print("Error: PySide6 library is missing.")
+        print("Error: PySide6 required.")
         sys.exit(1)
-    app = create_app()
+
+    # HighDPI rounding policy – ставим ДО QApplication, без deprecated атрибутов
+    set_rounding = getattr(
+        QtCore.QCoreApplication, "setHighDpiScaleFactorRoundingPolicy", None
+    )
+    if callable(set_rounding):
+        try:
+            set_rounding(
+              QtCore.Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+            )
+        except Exception:
+            # Если платформа или версия Qt не поддерживает — просто игнорируем
+            pass
+
+    app = QtWidgets.QApplication(sys.argv)
+
+    app.setStyle("Fusion")
+
+    font = app.font()
+    font.setPointSize(10)
+    app.setFont(font)
+
+    w = ZilantWindow()
+    w.show()
     sys.exit(app.exec())
 
 
