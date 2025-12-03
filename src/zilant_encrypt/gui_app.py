@@ -407,7 +407,7 @@ if QT_AVAILABLE:
             self.decoy_password_edit.setMinimumHeight(44)
             decoy_layout.addWidget(self.decoy_password_edit)
 
-            self.decoy_picker_label = QtWidgets.QLabel(self.ui_strings.decoy_label)
+            self.decoy_picker_label = QtWidgets.QLabel(self.ui_strings.decoy_select_ph)
             self.decoy_picker_label.setObjectName("H2")
             self.decoy_picker = self._create_path_picker(self._browse_decoy_input)
             decoy_layout.addWidget(self.decoy_picker_label)
@@ -553,7 +553,7 @@ if QT_AVAILABLE:
             self.decoy_group.setTitle(self.ui_strings.decoy_group)
             self.decoy_info_lbl.setText(self.ui_strings.decoy_subtitle)
             self.decoy_password_edit.setPlaceholderText(self.ui_strings.decoy_password)
-            self.decoy_picker_label.setText("📄 " + self.ui_strings.decoy_label)
+            self.decoy_picker_label.setText("📄 " + self.ui_strings.decoy_select_ph)
             self.decoy_picker["btn"].setText(self.ui_strings.browse)
 
             self.decrypt_opts_frame.setTitle(self.ui_strings.decrypt_target_label)
