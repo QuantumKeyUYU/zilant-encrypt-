@@ -42,6 +42,9 @@ Launch the desktop shell (requires the `gui` extra):
 python -m zilant_encrypt.gui_app
 ```
 
+The GUI provides two tabs: **Encrypt / Decrypt** for day-to-day use and **Inspect / Check** to
+validate container structure or tags without decrypting payloads.
+
 ## Quick start
 
 Encrypt a single file (password-only by default):

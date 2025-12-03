@@ -23,12 +23,15 @@ python -m zilant_encrypt.gui_app
 
 The GUI mirrors the CLI feature set:
 
-- **Encrypt / Decrypt** files or directories with one action button.
-- Optional **decoy volume**: enable the decoy toggle, set a decoy password, and choose a decoy
-  input (or reuse the main input by leaving it blank).
-- **Security mode** selector: Password-only by default, or PQ-hybrid when `oqs` is available. The
-  decrypt screen supports an advanced toggle for forcing main/decoy volume selection or assuming
-  PQ-hybrid containers.
+- **Encrypt / Decrypt** tab: grouped blocks for mode selection, source/destination, password &
+  security mode, decoy configuration, and advanced decrypt options (auto/main/decoy, assume
+  PQ-hybrid). The action button flips between Encrypt/Decrypt, and an “Open output folder” shortcut
+  appears after success.
+- **Decoy volume** support: enable the decoy toggle, set a decoy password, and choose a decoy input
+  (or reuse the main input by leaving it blank).
+- **Inspect / Check** tab: choose a container, optionally enable “Run full integrity check” with a
+  password, then click **Inspect container** to view a read-only report (version, volumes, PQ
+  availability, and validation status) without decrypting payloads.
 
 ## CLI quickstart
 
