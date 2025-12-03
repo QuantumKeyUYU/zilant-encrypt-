@@ -5,6 +5,8 @@ from pathlib import Path
 import importlib.util
 import sys
 
+from zilant_encrypt import __version__
+
 from zilant_encrypt.container import (
     ContainerOverview,
     check_container,
@@ -71,7 +73,7 @@ if QT_AVAILABLE:
     class ZilantWindow(QtWidgets.QMainWindow):
         def __init__(self) -> None:
             super().__init__()
-            self.setWindowTitle("Zilant Encrypt")
+            self.setWindowTitle(f"Zilant Encrypt v{__version__}")
             self.resize(820, 720)
 
             self._output_path: Path | None = None
@@ -102,7 +104,7 @@ if QT_AVAILABLE:
             title.setFont(title_font)
 
             subtitle = QtWidgets.QLabel(
-                "Encrypted containers with decoys & PQ-hybrid (local only)"
+                f"v{__version__} · Encrypted containers with decoys & PQ-hybrid"
             )
             subtitle_font = QtGui.QFont()
             subtitle_font.setPointSize(12)
@@ -266,10 +268,18 @@ if QT_AVAILABLE:
             self.action_button.clicked.connect(self._on_action_clicked)
             action_layout.addWidget(self.action_button)
 
+            aux_layout = QtWidgets.QHBoxLayout()
             self.open_output_button = QtWidgets.QPushButton("Open output folder")
             self.open_output_button.setEnabled(False)
             self.open_output_button.clicked.connect(self._open_output_folder)
-            action_layout.addWidget(self.open_output_button)
+            aux_layout.addWidget(self.open_output_button)
+
+            about_button = QtWidgets.QPushButton("About")
+            about_button.clicked.connect(self._show_about_dialog)
+            aux_layout.addWidget(about_button)
+            aux_layout.addStretch(1)
+
+            action_layout.addLayout(aux_layout)
 
             self.workflow_layout.addLayout(action_layout)
 
@@ -321,11 +331,16 @@ if QT_AVAILABLE:
 
         def _build_status_bar(self) -> None:
             self.status_label = QtWidgets.QLabel(STATUS_READY)
+            footer_version = QtWidgets.QLabel(
+                f"v{__version__} · Encrypted containers with decoys & PQ-hybrid"
+            )
+            footer_version.setStyleSheet("color: #A0A0A0; font-size: 11px;")
             footer = QtWidgets.QLabel("No telemetry. Local-only crypto.")
             footer.setStyleSheet("color: #A0A0A0; font-size: 11px;")
 
             status_layout = QtWidgets.QVBoxLayout()
             status_layout.addWidget(self.status_label)
+            status_layout.addWidget(footer_version)
             status_layout.addWidget(footer)
             self.main_layout.addLayout(status_layout)
 
@@ -686,6 +701,40 @@ if QT_AVAILABLE:
 
         def _show_info(self, title: str, message: str) -> None:
             QtWidgets.QMessageBox.information(self, title, message)
+
+        def _show_about_dialog(self) -> None:
+            dialog = QtWidgets.QDialog(self)
+            dialog.setWindowTitle("About Zilant Encrypt")
+
+            layout = QtWidgets.QVBoxLayout(dialog)
+
+            title = QtWidgets.QLabel("Zilant Encrypt")
+            title_font = QtGui.QFont()
+            title_font.setPointSize(14)
+            title_font.setBold(True)
+            title.setFont(title_font)
+            layout.addWidget(title)
+
+            version_label = QtWidgets.QLabel(f"Version v{__version__}")
+            layout.addWidget(version_label)
+
+            description = QtWidgets.QLabel(
+                "Secure local containers with optional decoy volumes and PQ-hybrid mode."
+            )
+            description.setWordWrap(True)
+            layout.addWidget(description)
+
+            link = QtWidgets.QLabel(
+                '<a href="https://github.com/zilant-team/zilant-encrypt">https://github.com/zilant-team/zilant-encrypt</a>'
+            )
+            link.setOpenExternalLinks(True)
+            layout.addWidget(link)
+
+            buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok)
+            buttons.accepted.connect(dialog.accept)
+            layout.addWidget(buttons)
+
+            dialog.exec()
 
 
     def create_app() -> QtWidgets.QApplication:

@@ -18,7 +18,7 @@ Install the optional GUI extras and launch the desktop shell:
 
 ```
 pip install "zilant-encrypt[gui]"
-python -m zilant_encrypt.gui_app
+zilenc-gui
 ```
 
 The GUI mirrors the CLI feature set:
@@ -32,6 +32,7 @@ The GUI mirrors the CLI feature set:
 - **Inspect / Check** tab: choose a container, optionally enable “Run full integrity check” with a
   password, then click **Inspect container** to view a read-only report (version, volumes, PQ
   availability, and validation status) without decrypting payloads.
+- Version is displayed in the window title and in the About dialog for quick verification.
 
 ## CLI quickstart
 

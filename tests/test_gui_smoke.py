@@ -41,3 +41,27 @@ def test_format_overview_report() -> None:
     assert "sample.zil" in report
     assert "main" in report
     assert "decoy" in report
+
+
+def test_window_title_includes_version() -> None:
+    import zilant_encrypt
+    from zilant_encrypt import gui_app
+
+    if not gui_app.QT_AVAILABLE:
+        pytest.skip("PySide6 is not installed")
+
+    app = gui_app.QtWidgets.QApplication.instance()
+    created_app = False
+    if app is None:
+        app = gui_app.QtWidgets.QApplication([])
+        created_app = True
+
+    window = gui_app.ZilantWindow()
+    title = window.windowTitle()
+
+    assert "Zilant Encrypt" in title
+    assert zilant_encrypt.__version__ in title
+
+    window.close()
+    if created_app:
+        app.quit()

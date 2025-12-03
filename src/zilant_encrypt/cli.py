@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import getpass
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Callable, Literal, cast
 
@@ -44,13 +43,6 @@ EXIT_PQ_UNSUPPORTED = 5
 PQ_ERROR_MESSAGE = "Error: container requires PQ support (oqs) which is not available on this system."
 
 console = Console()
-
-
-def _package_version() -> str:
-    try:
-        return version("zilant-encrypt")
-    except PackageNotFoundError:
-        return __version__
 
 
 def _prompt_password(password_opt: str | None) -> str:
@@ -160,7 +152,13 @@ def _handle_action(
     context_settings={"help_option_names": ["-h", "--help"]},
     invoke_without_command=False,
 )
-@click.version_option(version=_package_version(), prog_name="Zilant Encrypt")
+@click.version_option(
+    __version__,
+    "-V",
+    "--version",
+    prog_name="Zilant Encrypt",
+    message="%(prog)s v%(version)s",
+)
 def cli() -> None:
     """Manage v3 .zil containers (encrypt, decrypt, inspect, check).
 
@@ -172,6 +170,11 @@ def cli() -> None:
     PQ-hybrid commands require oqs; without it you will see:
       Error: container requires PQ support (oqs) which is not available on this system.
     """
+
+
+@cli.command(help="Show the installed version.")
+def version() -> None:
+    click.echo(f"Zilant Encrypt v{__version__}")
 
 
 @cli.command(
