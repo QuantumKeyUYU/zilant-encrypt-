@@ -1,0 +1,4 @@
+# file: C:\Users\uyuke\zilant-encrypt-\src\zilant_encrypt\container\format.py
+# hypothesis_version: 6.148.5
+
+[b'\x00', b'ZILENC', 128, 1024, 1088, 2400, '<6sBHI', '<BBHQQI', '<H16sIII12sH16sHH16s', 'Header too short', 'Invalid magic', 'No descriptors found', 'Unknown key_mode', 'Unsupported key mode', 'Unsupported version']

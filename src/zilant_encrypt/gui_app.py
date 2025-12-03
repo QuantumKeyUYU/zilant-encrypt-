@@ -11,7 +11,6 @@ from typing import Any, Callable, Literal
 from zilant_encrypt import __version__
 from zilant_encrypt.container import (
     ContainerOverview,
-    ModeLiteral,
     check_container,
     decrypt_auto_volume,
     decrypt_file,
@@ -25,7 +24,6 @@ from zilant_encrypt.errors import (
     IntegrityError,
     InvalidPassword,
     PqSupportError,
-    UnsupportedFeatureError,
 )
 
 QT_AVAILABLE = importlib.util.find_spec("PySide6") is not None
