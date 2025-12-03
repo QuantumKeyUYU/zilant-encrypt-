@@ -32,7 +32,18 @@ tool is usable without reading the source.
 python -m pip install .
 # or with dev tools
 python -m pip install .[dev]
+# desktop GUI extras
+python -m pip install .[gui]
 ```
+
+Launch the desktop shell (requires the `gui` extra):
+
+```bash
+python -m zilant_encrypt.gui_app
+```
+
+The GUI provides two tabs: **Encrypt / Decrypt** for day-to-day use and **Inspect / Check** to
+validate container structure or tags without decrypting payloads.
 
 ## Quick start
 

@@ -12,6 +12,27 @@ pip install zilant-encrypt
 PQ-hybrid mode requires `liboqs` and the `oqs` Python binding. See
 `docs/INSTALL_PQ_DESKTOP.md` for platform notes.
 
+## Desktop GUI
+
+Install the optional GUI extras and launch the desktop shell:
+
+```
+pip install "zilant-encrypt[gui]"
+python -m zilant_encrypt.gui_app
+```
+
+The GUI mirrors the CLI feature set:
+
+- **Encrypt / Decrypt** tab: grouped blocks for mode selection, source/destination, password &
+  security mode, decoy configuration, and advanced decrypt options (auto/main/decoy, assume
+  PQ-hybrid). The action button flips between Encrypt/Decrypt, and an “Open output folder” shortcut
+  appears after success.
+- **Decoy volume** support: enable the decoy toggle, set a decoy password, and choose a decoy input
+  (or reuse the main input by leaving it blank).
+- **Inspect / Check** tab: choose a container, optionally enable “Run full integrity check” with a
+  password, then click **Inspect container** to view a read-only report (version, volumes, PQ
+  availability, and validation status) without decrypting payloads.
+
 ## CLI quickstart
 
 The CLI entry point is `zilenc`.
