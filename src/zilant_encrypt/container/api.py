@@ -1,49 +1,31 @@
-"""Compatibility facade exposing the container API."""
+"""Compatibility facade — re-exports public container API.
+
+Prefer importing from ``zilant_encrypt.container`` directly.
+This module exists for backward compatibility with tests and internal usage.
+"""
 from __future__ import annotations
 
+# Re-export everything from the canonical __init__
+from zilant_encrypt.container import *  # noqa: F401, F403
+from zilant_encrypt.container import __all__ as _container_all
+
+# Also re-export internal helpers that existing tests rely on
 from zilant_encrypt.container.core import (
-    ARGON_MEM_MAX_KIB,
-    ARGON_MEM_MIN_KIB,
-    ARGON_PARALLELISM_MAX,
-    ARGON_PARALLELISM_MIN,
-    ARGON_TIME_MAX,
-    ARGON_TIME_MIN,
-    ModeLiteral,
-    PayloadMeta,
-    VolumeLayout,
     _decrypt_volume,
     _derive_file_key,
     _ensure_output,
-    build_volume_descriptor,
-    check_container,
-    decrypt_auto_volume,
-    decrypt_file,
-    encrypt_file,
-    encrypt_with_decoy,
-    normalize_mode,
-    resolve_argon_params,
 )
-from zilant_encrypt.container.format import RESERVED_LEN
 from zilant_encrypt.container.keymgmt import (
-    WRAP_NONCE,
-    PasswordKeyProvider,
-    WrappedKey,
     _validate_argon_params,
     _validate_decrypt_argon_params,
     _zeroize,
 )
 from zilant_encrypt.container.overview import (
-    ContainerOverview,
     _ciphertext_length_for_descriptor,
     _load_overview,
     _select_descriptors,
 )
 from zilant_encrypt.container.payload import (
-    MAX_PAYLOAD_META_LEN,
-    PAYLOAD_MAGIC,
-    PAYLOAD_META_LEN_SIZE,
-    PAYLOAD_VERSION,
-    STREAM_CHUNK_SIZE,
     _build_payload_header,
     _decrypt_stream,
     _encrypt_stream,
@@ -51,28 +33,15 @@ from zilant_encrypt.container.payload import (
     _PayloadSource,
     _PayloadWriter,
 )
+from zilant_encrypt.container.format import RESERVED_LEN
 from zilant_encrypt.crypto.aead import TAG_LEN, AesGcmEncryptor
 
 __all__ = [
-    "ARGON_MEM_MAX_KIB",
-    "ARGON_MEM_MIN_KIB",
-    "ARGON_PARALLELISM_MAX",
-    "ARGON_PARALLELISM_MIN",
-    "ARGON_TIME_MAX",
-    "ARGON_TIME_MIN",
-    "MAX_PAYLOAD_META_LEN",
-    "PAYLOAD_MAGIC",
-    "PAYLOAD_META_LEN_SIZE",
-    "PAYLOAD_VERSION",
+    *_container_all,
+    # Internal helpers for tests
     "AesGcmEncryptor",
-    "TAG_LEN",
     "RESERVED_LEN",
-    "PasswordKeyProvider",
-    "PayloadMeta",
-    "STREAM_CHUNK_SIZE",
-    "VolumeLayout",
-    "WrappedKey",
-    "WRAP_NONCE",
+    "TAG_LEN",
     "_NullWriter",
     "_PayloadSource",
     "_PayloadWriter",
@@ -88,14 +57,4 @@ __all__ = [
     "_validate_argon_params",
     "_validate_decrypt_argon_params",
     "_zeroize",
-    "build_volume_descriptor",
-    "check_container",
-    "decrypt_auto_volume",
-    "decrypt_file",
-    "encrypt_file",
-    "encrypt_with_decoy",
-    "normalize_mode",
-    "resolve_argon_params",
-    "ModeLiteral",
-    "ContainerOverview",
 ]

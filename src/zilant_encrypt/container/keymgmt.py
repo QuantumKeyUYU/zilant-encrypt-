@@ -1,8 +1,11 @@
 """Key management utilities for container operations."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 from cryptography.exceptions import InvalidTag
 
@@ -32,26 +35,40 @@ class WrappedKey:
 
 
 class PasswordKeyProvider:
-    """Password-based key provider using Argon2id."""
+    """Password-based key provider using Argon2id with optional keyfile."""
 
-    def __init__(self, password: str, salt: bytes, params: Argon2Params) -> None:
+    def __init__(
+        self,
+        password: str,
+        salt: bytes,
+        params: Argon2Params,
+        keyfile_material: bytes | None = None,
+    ) -> None:
         self.password = password
         self.salt = salt
         self.params = params
+        self._keyfile_material = keyfile_material
         self._password_key: bytearray | None = None
 
     def _ensure_key(self) -> bytearray:
         """Derive key if missing and return mutable reference for zeroization."""
         if self._password_key is None:
-            self._password_key = bytearray(
-                derive_key_from_password(
-                    self.password,
-                    self.salt,
-                    mem_cost=self.params.mem_cost_kib,
-                    time_cost=self.params.time_cost,
-                    parallelism=self.params.parallelism,
-                )
+            logger.debug(
+                "Deriving key (mem=%d KiB, time=%d, p=%d, keyfile=%s)",
+                self.params.mem_cost_kib, self.params.time_cost, self.params.parallelism,
+                "yes" if self._keyfile_material else "no",
             )
+            raw_key = derive_key_from_password(
+                self.password,
+                self.salt,
+                mem_cost=self.params.mem_cost_kib,
+                time_cost=self.params.time_cost,
+                parallelism=self.params.parallelism,
+            )
+            if self._keyfile_material is not None:
+                # XOR password-derived key with keyfile material
+                raw_key = bytes(a ^ b for a, b in zip(raw_key, self._keyfile_material))
+            self._password_key = bytearray(raw_key)
         return self._password_key
 
     def _clear_key(self) -> None:

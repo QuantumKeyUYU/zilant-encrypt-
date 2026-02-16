@@ -9,7 +9,7 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
-from typing import IO, Any, Literal, Optional, Protocol, Type
+from typing import IO, Any, Callable, Literal, Optional, Protocol, Type
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -208,6 +208,9 @@ def _build_payload_header(meta: PayloadMeta) -> bytes:
     return PAYLOAD_MAGIC + bytes([PAYLOAD_VERSION]) + meta_len + encoded_meta
 
 
+ProgressCallback = Callable[[int], None]
+
+
 def _encrypt_stream(
     in_file: IO[bytes],
     out_file: IO[bytes],
@@ -216,6 +219,7 @@ def _encrypt_stream(
     aad: bytes,
     *,
     initial: bytes = b"",
+    progress_callback: ProgressCallback | None = None,
 ) -> bytes:
     encryptor = Cipher(algorithms.AES(key), modes.GCM(nonce)).encryptor()
     encryptor.authenticate_additional_data(aad)
@@ -224,6 +228,8 @@ def _encrypt_stream(
         initial_chunk = encryptor.update(initial)
         if initial_chunk:
             out_file.write(initial_chunk)
+        if progress_callback:
+            progress_callback(len(initial))
 
     while True:
         chunk = in_file.read(STREAM_CHUNK_SIZE)
@@ -232,6 +238,8 @@ def _encrypt_stream(
         ciphertext = encryptor.update(chunk)
         if ciphertext:
             out_file.write(ciphertext)
+        if progress_callback:
+            progress_callback(len(chunk))
 
     final_chunk = encryptor.finalize()
     if final_chunk:
@@ -246,6 +254,8 @@ def _decrypt_stream(
     nonce: bytes,
     aad: bytes,
     ciphertext_len: int,
+    *,
+    progress_callback: ProgressCallback | None = None,
 ) -> None:
     decryptor = Cipher(algorithms.AES(key), modes.GCM(nonce)).decryptor()
     decryptor.authenticate_additional_data(aad)
@@ -259,6 +269,8 @@ def _decrypt_stream(
         plaintext = decryptor.update(chunk)
         if plaintext:
             writer.feed(plaintext)
+        if progress_callback:
+            progress_callback(len(chunk))
 
     tag = in_file.read(AEAD_TAG_LEN)
     if len(tag) != AEAD_TAG_LEN:
@@ -280,6 +292,7 @@ __all__ = [
     "PAYLOAD_META_LEN_SIZE",
     "PAYLOAD_VERSION",
     "PayloadMeta",
+    "ProgressCallback",
     "STREAM_CHUNK_SIZE",
     "_NullWriter",
     "_PayloadSource",

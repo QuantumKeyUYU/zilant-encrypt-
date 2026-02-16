@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import getpass
 from pathlib import Path
-from typing import Callable, Literal, cast
+from typing import Any, Callable, Literal, cast
 
 import click
 from rich.console import Console
+from rich.progress import BarColumn, DownloadColumn, Progress, TextColumn, TransferSpeedColumn
 from rich.table import Table
 
 from zilant_encrypt import __version__
@@ -32,6 +33,8 @@ from zilant_encrypt.errors import (
     PqSupportError,
     UnsupportedFeatureError,
 )
+from zilant_encrypt.crypto.keyfile import derive_keyfile_material
+from zilant_encrypt.password_strength import WeakPasswordError, evaluate_password, validate_password
 
 EXIT_SUCCESS = 0
 EXIT_USAGE = 1
@@ -45,10 +48,63 @@ PQ_ERROR_MESSAGE = "Error: container requires PQ support (oqs) which is not avai
 console = Console()
 
 
-def _prompt_password(password_opt: str | None) -> str:
+def _prompt_password(password_opt: str | None, *, confirm: bool = False) -> str:
     if password_opt is not None:
         return password_opt
-    return getpass.getpass("Password: ")
+    password = getpass.getpass("Password: ")
+    if confirm:
+        password2 = getpass.getpass("Confirm password: ")
+        if password != password2:
+            raise click.ClickException("Passwords do not match")
+    return password
+
+
+def _check_password_strength(password: str, *, is_encrypt: bool = False) -> None:
+    """Show password strength feedback during encryption."""
+    if not is_encrypt:
+        return
+    try:
+        strength = validate_password(password)
+        if strength.level == "weak":
+            console.print(f"[yellow]Warning: weak password ({strength.score}/100)[/yellow]")
+            for tip in strength.feedback:
+                console.print(f"[yellow]  - {tip}[/yellow]")
+        elif strength.level == "fair":
+            console.print(f"[yellow]Password strength: fair ({strength.score}/100)[/yellow]")
+    except WeakPasswordError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise click.Abort() from exc
+
+
+class _cli_progress:
+    """Context manager that yields a progress callback for streaming operations."""
+
+    def __init__(self, description: str, total: int) -> None:
+        self._description = description
+        self._total = total
+        self._progress: Progress | None = None
+        self._task_id: int | None = None
+
+    def __enter__(self) -> Callable[[int], None]:
+        if self._total > 0:
+            self._progress = Progress(
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(),
+                DownloadColumn(),
+                TransferSpeedColumn(),
+                console=console,
+            )
+            self._progress.start()
+            self._task_id = self._progress.add_task(self._description, total=self._total)
+        return self._advance
+
+    def _advance(self, n: int) -> None:
+        if self._progress is not None and self._task_id is not None:
+            self._progress.update(self._task_id, advance=n)
+
+    def __exit__(self, *args: object) -> None:
+        if self._progress is not None:
+            self._progress.stop()
 
 
 def _human_size(num_bytes: int) -> str:
@@ -177,6 +233,26 @@ def version() -> None:
     click.echo(f"Zilant Encrypt v{__version__}")
 
 
+@cli.command(help="Generate shell completion script.")
+@click.argument("shell", type=click.Choice(["bash", "zsh", "fish"]))
+def completion(shell: str) -> None:
+    """Output shell completion script for the given shell."""
+    import os
+
+    env_var = "_ZILENC_COMPLETE"
+    shell_map = {"bash": "bash_source", "zsh": "zsh_source", "fish": "fish_source"}
+    os.environ[env_var] = shell_map[shell]
+    try:
+        from click.shell_completion import get_completion_class
+
+        comp_cls = get_completion_class(shell)
+        if comp_cls is not None:
+            comp = comp_cls(cli, {}, "zilenc", env_var)
+            click.echo(comp.source())
+    finally:
+        del os.environ[env_var]
+
+
 @cli.command(
     help=(
         "Encrypt a file or directory into a .zil container. Supports optional "
@@ -249,6 +325,13 @@ def version() -> None:
     default=None,
     help="Override Argon2 parallelism (advanced).",
 )
+@click.option(
+    "--keyfile",
+    "keyfile_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Path to a keyfile for additional key material (combined with password).",
+)
 @click.pass_context
 def encrypt(
     ctx: click.Context,
@@ -263,8 +346,12 @@ def encrypt(
     argon_mem_kib: int | None,
     argon_time: int | None,
     argon_parallelism: int | None,
+    keyfile_path: Path | None,
 ) -> None:
-    password = _prompt_password(password_opt)
+    password = _prompt_password(password_opt, confirm=password_opt is None)
+    if password_opt is None:
+        _check_password_strength(password, is_encrypt=True)
+    kf_material = derive_keyfile_material(keyfile_path) if keyfile_path else None
     target = output_path or input_path.with_suffix(f"{input_path.suffix}.zil")
     normalized_mode = cast(ModeLiteral, _normalized_mode(mode, default_to_password=True))
 
@@ -282,6 +369,8 @@ def encrypt(
     if normalized_mode == "pq-hybrid" and not pq.available():
         ctx.exit(_pq_error())
         return
+
+    total_size = input_path.stat().st_size if input_path.exists() else 0
 
     if decoy_password_opt:
         if volume != "main":
@@ -321,17 +410,22 @@ def encrypt(
                 ctx.exit(EXIT_USAGE)
                 return
 
-        code = _handle_action(
-            lambda: encrypt_file(
-                input_path,
-                target,
-                password,
-                overwrite=overwrite,
-                mode=normalized_mode,
-                volume_selector=cast(Literal["main", "decoy"], volume),
-                argon_params=argon_params,
-            ),
-        )
+        def _do_encrypt() -> None:
+            with _cli_progress("Encrypting", total_size) as callback:
+                encrypt_file(
+                    input_path,
+                    target,
+                    password,
+                    overwrite=overwrite,
+                    mode=normalized_mode,
+                    volume_selector=cast(Literal["main", "decoy"], volume),
+                    argon_params=argon_params,
+                    progress_callback=callback,
+                    keyfile_material=kf_material,
+                )
+
+        code = _handle_action(_do_encrypt)
+
     if code == EXIT_SUCCESS:
         size = target.stat().st_size if target.exists() else 0
         console.print(f"[green]Encrypted to[/green] {target} (~{_human_size(size)}).")
@@ -373,6 +467,13 @@ def encrypt(
     show_default=False,
     help="Which volume to decrypt (auto-detect if omitted; password decides main vs decoy).",
 )
+@click.option(
+    "--keyfile",
+    "keyfile_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Path to a keyfile (must match the one used during encryption).",
+)
 @click.pass_context
 def decrypt(
     ctx: click.Context,
@@ -382,8 +483,10 @@ def decrypt(
     overwrite: bool,
     mode: str | None,
     volume: str | None,
+    keyfile_path: Path | None,
 ) -> None:
     password = _prompt_password(password_opt)
+    kf_material = derive_keyfile_material(keyfile_path) if keyfile_path else None
     out_path = output_path or container.with_suffix(container.suffix + ".out")
 
     normalized_mode = _normalized_mode(mode)
@@ -393,6 +496,8 @@ def decrypt(
         return
 
     dec_mode = normalized_mode
+
+    container_size = container.stat().st_size if container.exists() else 0
 
     if volume is None:
         volume_result: dict[str, tuple[int, str]] = {}
@@ -413,15 +518,22 @@ def decrypt(
         )
     else:
         dec_volume = cast(Literal["main", "decoy"], volume)
+
+        def _do_decrypt() -> None:
+            with _cli_progress("Decrypting", container_size) as callback:
+                decrypt_file(
+                    container,
+                    out_path,
+                    password,
+                    overwrite=overwrite,
+                    mode=dec_mode,
+                    volume_selector=dec_volume,
+                    progress_callback=callback,
+                    keyfile_material=kf_material,
+                )
+
         code = _handle_action(
-            lambda: decrypt_file(
-                container,
-                out_path,
-                password,
-                overwrite=overwrite,
-                mode=dec_mode,
-                volume_selector=dec_volume,
-            ),
+            _do_decrypt,
         )
     if code == EXIT_SUCCESS:
         console.print(f"[green]Decrypted to[/green] {out_path}.")

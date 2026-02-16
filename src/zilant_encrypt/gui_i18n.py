@@ -89,6 +89,10 @@ class Strings:
     overview_status_skipped: str
     overview_pq_available: str
     overview_pq_missing: str
+    password_strength_weak: str
+    password_strength_fair: str
+    password_strength_good: str
+    password_strength_strong: str
 
 
 STRINGS: dict[Lang, Strings] = {
@@ -183,6 +187,10 @@ STRINGS: dict[Lang, Strings] = {
         overview_status_skipped="SKIPPED (no password)",
         overview_pq_available="PQ support: available",
         overview_pq_missing="PQ support: not available",
+        password_strength_weak="Weak",
+        password_strength_fair="Fair",
+        password_strength_good="Good",
+        password_strength_strong="Strong",
     ),
     "ru": Strings(
         app_title="Zilant Encrypt",
@@ -275,6 +283,10 @@ STRINGS: dict[Lang, Strings] = {
         overview_status_skipped="ПРОПУЩЕНО (нет пароля)",
         overview_pq_available="PQ: доступно",
         overview_pq_missing="PQ: недоступно",
+        password_strength_weak="Слабый",
+        password_strength_fair="Средний",
+        password_strength_good="Хороший",
+        password_strength_strong="Надёжный",
     ),
 }
 
