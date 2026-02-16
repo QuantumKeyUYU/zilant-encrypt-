@@ -5,9 +5,9 @@ import logging
 from dataclasses import dataclass
 from typing import Literal
 
-logger = logging.getLogger(__name__)
-
 from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from zilant_encrypt.crypto import pq
 from zilant_encrypt.crypto.aead import AesGcmEncryptor
@@ -19,7 +19,29 @@ from zilant_encrypt.errors import (
     UnsupportedFeatureError,
 )
 
+logger = logging.getLogger(__name__)
+
+# Legacy fixed nonce — kept for backward-compatible decryption of v3 containers
+# created before the HKDF-based nonce was introduced.
 WRAP_NONCE = b"\x00" * 12
+
+# HKDF info labels for deterministic nonce derivation
+_WRAP_NONCE_INFO = b"zilant-wrap-nonce-v1"
+
+
+def derive_wrap_nonce(salt: bytes) -> bytes:
+    """Derive a deterministic 12-byte wrap nonce from the Argon2 salt via HKDF.
+
+    This eliminates the fixed zero-nonce pattern. Each container gets a unique
+    wrap nonce because each container has a unique random salt.
+    """
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=12,
+        salt=salt,
+        info=_WRAP_NONCE_INFO,
+    )
+    return hkdf.derive(salt)
 ARGON_MEM_MIN_KIB = 32 * 1024
 ARGON_MEM_MAX_KIB = 2 * 1024 * 1024
 ARGON_TIME_MIN = 1
@@ -75,19 +97,32 @@ class PasswordKeyProvider:
         _zeroize(self._password_key)
         self._password_key = None
 
+    def _get_wrap_nonce(self) -> bytes:
+        """Return the wrap nonce — HKDF-derived from salt for new containers."""
+        return derive_wrap_nonce(self.salt)
+
     def wrap_file_key(self, file_key: bytes) -> WrappedKey:
         key = self._ensure_key()
+        nonce = self._get_wrap_nonce()
         try:
-            # Cast to bytes because AESGCM expects immutable bytes
-            ciphertext, tag = AesGcmEncryptor.encrypt(bytes(key), WRAP_NONCE, file_key, b"")
+            ciphertext, tag = AesGcmEncryptor.encrypt(bytes(key), nonce, file_key, b"")
             return WrappedKey(data=ciphertext, tag=tag)
         finally:
             self._clear_key()
 
     def unwrap_file_key(self, wrapped: WrappedKey) -> bytes:
         key = self._ensure_key()
+        nonce = self._get_wrap_nonce()
         try:
-            # Cast to bytes because AESGCM expects immutable bytes
+            return AesGcmEncryptor.decrypt(bytes(key), nonce, wrapped.data, wrapped.tag, b"")
+        except InvalidTag:
+            pass
+        finally:
+            self._clear_key()
+
+        # Fallback: try legacy zero nonce for containers created before HKDF nonce
+        key = self._ensure_key()
+        try:
             return AesGcmEncryptor.decrypt(bytes(key), WRAP_NONCE, wrapped.data, wrapped.tag, b"")
         except InvalidTag as exc:
             raise InvalidPassword("Unable to unwrap file key") from exc
@@ -120,10 +155,14 @@ def _validate_decrypt_argon_params(params: Argon2Params) -> Argon2Params:
 
 
 def _zeroize(buffer: bytearray | None) -> None:
+    """Zero a bytearray in-place with a read-back barrier."""
     if buffer is None:
         return
     for idx in range(len(buffer)):
         buffer[idx] = 0
+    # Read-back barrier: prevents optimizer from eliding the zeroing
+    if len(buffer) > 0:
+        _ = buffer[0]
 
 
 def resolve_argon_params(

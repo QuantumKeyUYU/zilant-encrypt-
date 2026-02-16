@@ -9,8 +9,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
-logger = logging.getLogger(__name__)
-
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -41,6 +39,7 @@ from zilant_encrypt.container.keymgmt import (
     _validate_decrypt_argon_params,
     _validate_pq_available,
     _zeroize,
+    derive_wrap_nonce,
     resolve_argon_params,
 )
 from zilant_encrypt.container.overview import (
@@ -70,6 +69,8 @@ from zilant_encrypt.errors import (
     PqSupportError,
     UnsupportedFeatureError,
 )
+
+logger = logging.getLogger(__name__)
 
 ModeLiteral = Literal["password", "pq-hybrid"]
 
@@ -156,17 +157,27 @@ def _decrypt_volume(
                 parallelism=decrypt_params.parallelism,
             )
         )
-        try:
-            kem_secret = AesGcmEncryptor.decrypt(
-                bytes(password_key),  # cast to bytes for library call
-                WRAP_NONCE,
-                descriptor.pq_wrapped_secret,
-                descriptor.pq_wrapped_secret_tag,
-                b"",
-            )
-        except InvalidTag as exc:
+
+        wrap_nonce = derive_wrap_nonce(descriptor.salt_argon2)
+
+        # Try HKDF-derived nonce first, then legacy zero nonce
+        kem_secret = None
+        for nonce_candidate in (wrap_nonce, WRAP_NONCE):
+            try:
+                kem_secret = AesGcmEncryptor.decrypt(
+                    bytes(password_key),
+                    nonce_candidate,
+                    descriptor.pq_wrapped_secret,
+                    descriptor.pq_wrapped_secret_tag,
+                    b"",
+                )
+                break
+            except InvalidTag:
+                continue
+
+        if kem_secret is None:
             _zeroize(password_key)
-            raise InvalidPassword("Unable to unwrap KEM secret key") from exc
+            raise InvalidPassword("Unable to unwrap KEM secret key")
 
         shared_secret = pq.decapsulate(descriptor.pq_ciphertext, kem_secret)
         hkdf = HKDF(
@@ -176,22 +187,27 @@ def _decrypt_volume(
             info=b"zilant-pq-hybrid",
         )
 
-        # Convert derived master key to mutable bytearray immediately for zeroization
         master_key = bytearray(hkdf.derive(shared_secret + password_key))
 
-        try:
-            return AesGcmEncryptor.decrypt(
-                bytes(master_key),  # cast to bytes for library call
-                WRAP_NONCE,
-                descriptor.wrapped_key,
-                descriptor.wrapped_key_tag,
-                b"",
-            )
-        except InvalidTag as exc:
-            raise InvalidPassword("Unable to unwrap file key") from exc
-        finally:
-            _zeroize(password_key)
-            _zeroize(master_key)
+        # Try HKDF-derived nonce first, then legacy zero nonce
+        for nonce_candidate in (wrap_nonce, WRAP_NONCE):
+            try:
+                result = AesGcmEncryptor.decrypt(
+                    bytes(master_key),
+                    nonce_candidate,
+                    descriptor.wrapped_key,
+                    descriptor.wrapped_key_tag,
+                    b"",
+                )
+                _zeroize(password_key)
+                _zeroize(master_key)
+                return result
+            except InvalidTag:
+                continue
+
+        _zeroize(password_key)
+        _zeroize(master_key)
+        raise InvalidPassword("Unable to unwrap file key")
 
     raise UnsupportedFeatureError("Unsupported key mode")
 
@@ -269,17 +285,18 @@ def build_volume_descriptor(
 
         # Store as mutable bytearray for subsequent zeroization
         master_key = bytearray(hkdf.derive(shared_secret + password_key))
+        wrap_nonce = derive_wrap_nonce(salt)
 
         try:
             wrapped_key_data, wrapped_key_tag = AesGcmEncryptor.encrypt(
-                bytes(master_key),  # cast to bytes
-                WRAP_NONCE,
+                bytes(master_key),
+                wrap_nonce,
                 file_key,
                 b""
             )
             wrapped_secret, wrapped_secret_tag = AesGcmEncryptor.encrypt(
-                bytes(password_key),  # cast to bytes
-                WRAP_NONCE,
+                bytes(password_key),
+                wrap_nonce,
                 secret_key,
                 b""
             )
@@ -690,7 +707,12 @@ def decrypt_auto_volume(
     mode: ModeLiteral | None = None,
     overwrite: bool = False,
 ) -> tuple[int, str]:
-    """Attempt to decrypt any volume that matches the provided password."""
+    """Attempt to decrypt any volume that matches the provided password.
+
+    For timing-attack resistance, key derivation is always attempted against
+    ALL volumes regardless of early success. This prevents an observer from
+    determining which volume was unlocked based on timing.
+    """
     container = Path(container_path)
     output = Path(out_path)
 
@@ -712,8 +734,11 @@ def decrypt_auto_volume(
             raise UnsupportedFeatureError("all volumes in a container must share the same key_mode")
 
         ordered = sorted(descriptors, key=lambda d: d.volume_index)
-        successful: tuple[int, str] | None = None
 
+        # Phase 1: Try to unwrap keys for ALL volumes (constant-time key derivation).
+        # This ensures an observer cannot tell which volume matched by measuring
+        # how many Argon2 derivations were performed.
+        unwrapped: list[tuple[VolumeDescriptor, bytes, int]] = []
         for descriptor in ordered:
             expected_mode = "pq-hybrid" if descriptor.key_mode == KEY_MODE_PQ_HYBRID else "password"
             if resolved_mode is not None and resolved_mode != expected_mode:
@@ -725,7 +750,13 @@ def decrypt_auto_volume(
 
             try:
                 file_key = _decrypt_volume(descriptor, password, resolved_mode=resolved_mode)
+                unwrapped.append((descriptor, file_key, ciphertext_len))
+            except (InvalidPassword, IntegrityError):
+                continue
 
+        # Phase 2: Attempt full decryption for the first volume that unwrapped.
+        for descriptor, file_key, ciphertext_len in unwrapped:
+            try:
                 with tempfile.TemporaryDirectory() as temp_dir:
                     temp_out = Path(temp_dir) / "payload"
                     writer = _PayloadWriter(temp_out)
@@ -746,17 +777,17 @@ def decrypt_auto_volume(
                         output.parent.mkdir(parents=True, exist_ok=True)
                         shutil.move(str(temp_out), output)
 
-                volume_name = "main" if descriptor.volume_index == 0 else "decoy" if descriptor.volume_index == 1 else f"id={descriptor.volume_index}"
-                successful = (descriptor.volume_index, volume_name)
-                break
+                volume_name = (
+                    "main" if descriptor.volume_index == 0
+                    else "decoy" if descriptor.volume_index == 1
+                    else f"id={descriptor.volume_index}"
+                )
+                return (descriptor.volume_index, volume_name)
 
-            except (InvalidPassword, IntegrityError):
+            except (IntegrityError, ContainerFormatError):
                 continue
 
-        if successful is None:
-            raise InvalidPassword("Unable to decrypt any volume with the provided password")
-
-        return successful
+        raise InvalidPassword("Unable to decrypt any volume with the provided password")
 
 
 def normalize_mode(mode: str | None) -> ModeLiteral:
