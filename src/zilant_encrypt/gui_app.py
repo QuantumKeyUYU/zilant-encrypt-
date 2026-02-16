@@ -31,6 +31,7 @@ from zilant_encrypt.errors import (
     PqSupportError,
 )
 from zilant_encrypt.gui_i18n import Lang, Strings, get_strings
+from zilant_encrypt.password_strength import evaluate_password
 
 # --- QT CHECK ---
 QT_AVAILABLE = importlib.util.find_spec("PySide6") is not None
@@ -401,6 +402,36 @@ if QT_AVAILABLE:
             self._retranslate_ui()
             self._validate_encrypt_tab()
 
+            # Enable drag & drop
+            self.setAcceptDrops(True)
+
+        def dragEnterEvent(self, event: QtGui.QDragEnterEvent) -> None:
+            if event.mimeData().hasUrls():
+                event.acceptProposedAction()
+
+        def dropEvent(self, event: QtGui.QDropEvent) -> None:
+            urls = event.mimeData().urls()
+            if not urls:
+                return
+            path = urls[0].toLocalFile()
+            if not path:
+                return
+
+            # If .zil file dropped -> switch to decrypt mode and fill input
+            if path.endswith(".zil"):
+                self.rad_dec.setChecked(True)
+                self.wdg_input["txt"].setText(path)
+                self._auto_output()
+            else:
+                self.rad_enc.setChecked(True)
+                p = Path(path)
+                if p.is_dir():
+                    self.rad_dir.setChecked(True)
+                else:
+                    self.rad_file.setChecked(True)
+                self.wdg_input["txt"].setText(path)
+                self._auto_output()
+
         # ---------- HEADER ----------
 
         def _build_header(self) -> None:
@@ -539,6 +570,7 @@ if QT_AVAILABLE:
             self.txt_pass = QtWidgets.QLineEdit()
             self.txt_pass.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
             self.txt_pass.textChanged.connect(self._validate_encrypt_tab)
+            self.txt_pass.textChanged.connect(self._update_password_strength)
 
             self.btn_eye = QtWidgets.QPushButton("👁")
             self.btn_eye.setFixedWidth(46)
@@ -548,6 +580,32 @@ if QT_AVAILABLE:
             pass_field.addWidget(self.txt_pass)
             pass_field.addWidget(self.btn_eye)
             sec_lay.addLayout(pass_field)
+
+            # Password strength meter
+            strength_row = QtWidgets.QHBoxLayout()
+            strength_row.setSpacing(8)
+            self.password_strength_bar = QtWidgets.QProgressBar()
+            self.password_strength_bar.setRange(0, 100)
+            self.password_strength_bar.setValue(0)
+            self.password_strength_bar.setFixedHeight(6)
+            self.password_strength_bar.setTextVisible(False)
+            self.password_strength_bar.setStyleSheet(f"""
+                QProgressBar {{
+                    background-color: {THEME['bg_input']};
+                    border: none;
+                    border-radius: 3px;
+                }}
+                QProgressBar::chunk {{
+                    background-color: {THEME['text_dim']};
+                    border-radius: 3px;
+                }}
+            """)
+            self.lbl_strength = QtWidgets.QLabel("")
+            self.lbl_strength.setObjectName("Tip")
+            self.lbl_strength.setFixedWidth(120)
+            strength_row.addWidget(self.password_strength_bar)
+            strength_row.addWidget(self.lbl_strength)
+            sec_lay.addLayout(strength_row)
 
             self.grp_decoy = QtWidgets.QGroupBox()
             self.grp_decoy.setCheckable(True)
@@ -872,6 +930,41 @@ if QT_AVAILABLE:
                 self.wdg_insp["txt"].setText(res)
 
         # ---------- SMALL UI HELPERS ----------
+
+        def _update_password_strength(self, text: str) -> None:
+            """Update the password strength meter."""
+            if not text:
+                self.password_strength_bar.setValue(0)
+                self.lbl_strength.setText("")
+                self.password_strength_bar.setStyleSheet(f"""
+                    QProgressBar {{ background-color: {THEME['bg_input']}; border: none; border-radius: 3px; }}
+                    QProgressBar::chunk {{ background-color: {THEME['text_dim']}; border-radius: 3px; }}
+                """)
+                return
+
+            strength = evaluate_password(text)
+            self.password_strength_bar.setValue(strength.score)
+
+            colors = {
+                "weak": THEME["error"],
+                "fair": "#F59E0B",
+                "good": THEME["accent_blue"],
+                "strong": THEME["success"],
+            }
+            labels = {
+                "weak": self.ui_strings.password_strength_weak,
+                "fair": self.ui_strings.password_strength_fair,
+                "good": self.ui_strings.password_strength_good,
+                "strong": self.ui_strings.password_strength_strong,
+            }
+
+            color = colors[strength.level]
+            self.lbl_strength.setText(labels[strength.level])
+            self.lbl_strength.setStyleSheet(f"color: {color}; font-size: 12px; font-weight: 600;")
+            self.password_strength_bar.setStyleSheet(f"""
+                QProgressBar {{ background-color: {THEME['bg_input']}; border: none; border-radius: 3px; }}
+                QProgressBar::chunk {{ background-color: {color}; border-radius: 3px; }}
+            """)
 
         def _on_mode_switched(self) -> None:
             self._update_ui_state()

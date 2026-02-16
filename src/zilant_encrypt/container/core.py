@@ -1,12 +1,15 @@
 """Core high-level operations for container encryption/decryption."""
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
@@ -49,6 +52,7 @@ from zilant_encrypt.container.overview import (
 )
 from zilant_encrypt.container.payload import (
     PayloadMeta,
+    ProgressCallback,
     _build_payload_header,
     _decrypt_stream,
     _encrypt_stream,
@@ -107,6 +111,7 @@ def _decrypt_volume(
     descriptor: VolumeDescriptor,
     password: str,
     resolved_mode: ModeLiteral | None = None,
+    keyfile_material: bytes | None = None,
 ) -> bytes:
     decrypt_params = _validate_decrypt_argon_params(
         Argon2Params(
@@ -123,7 +128,7 @@ def _decrypt_volume(
         raise UnsupportedFeatureError("requested decrypt mode does not match volume key_mode")
 
     if descriptor.key_mode == KEY_MODE_PASSWORD_ONLY:
-        provider = PasswordKeyProvider(password, descriptor.salt_argon2, decrypt_params)
+        provider = PasswordKeyProvider(password, descriptor.salt_argon2, decrypt_params, keyfile_material=keyfile_material)
         try:
             return provider.unwrap_file_key(
                 WrappedKey(data=descriptor.wrapped_key, tag=descriptor.wrapped_key_tag),
@@ -201,6 +206,7 @@ def build_volume_descriptor(
     file_key: bytes,
     nonce: bytes,
     pq_artifacts: tuple[bytes, bytes, bytes, bytes] | None = None,
+    keyfile_material: bytes | None = None,
 ) -> VolumeDescriptor:
     """Construct a :class:`VolumeDescriptor` for the given parameters."""
 
@@ -208,7 +214,7 @@ def build_volume_descriptor(
     reserved_bytes = bytes(RESERVED_LEN)
 
     if resolved_mode == "password":
-        provider = _PasswordOnlyProviderFactory(password, argon_params, salt).build()
+        provider = PasswordKeyProvider(password, salt, argon_params, keyfile_material=keyfile_material)
         wrapped_key = provider.wrap_file_key(file_key)
         placeholder_ciphertext = os.urandom(PQ_PLACEHOLDER_CIPHERTEXT_LEN)
         placeholder_secret = os.urandom(PQ_PLACEHOLDER_SECRET_LEN)
@@ -314,8 +320,13 @@ def _ensure_output(path: Path, overwrite: bool) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def _derive_file_key(descriptor: VolumeDescriptor, password: str, resolved_mode: ModeLiteral | None) -> bytes:
-    return _decrypt_volume(descriptor, password, resolved_mode)
+def _derive_file_key(
+    descriptor: VolumeDescriptor,
+    password: str,
+    resolved_mode: ModeLiteral | None,
+    keyfile_material: bytes | None = None,
+) -> bytes:
+    return _decrypt_volume(descriptor, password, resolved_mode, keyfile_material=keyfile_material)
 
 
 def check_container(
@@ -367,6 +378,8 @@ def encrypt_file(
     mode: ModeLiteral | None = None,
     volume_selector: Literal["main", "decoy"] = "main",
     argon_params: Argon2Params | None = None,
+    progress_callback: ProgressCallback | None = None,
+    keyfile_material: bytes | None = None,
 ) -> None:
     """Encrypt input file or directory into a .zil container."""
     if not in_path.exists():
@@ -389,6 +402,8 @@ def encrypt_file(
             "Adding a decoy volume requires rebuilding the container with encrypt_with_decoy to preserve header integrity",
         )
 
+    logger.info("Encrypting %s -> %s (mode=%s)", in_path, out_path, resolved_mode or "auto")
+
     salt = os.urandom(16)
     nonce = os.urandom(12)
     file_key = os.urandom(32)
@@ -403,6 +418,7 @@ def encrypt_file(
         argon_params=argon_params,
         file_key=file_key,
         nonce=nonce,
+        keyfile_material=keyfile_material,
     )
 
     with _PayloadSource(in_path) as payload_source:
@@ -458,7 +474,10 @@ def encrypt_file(
         with out_path.open("xb") as dest:
             dest.write(header_bytes)
             with payload_source.path.open("rb") as payload_file:
-                tag = _encrypt_stream(payload_file, dest, file_key, nonce, aad, initial=payload_header)
+                tag = _encrypt_stream(
+                    payload_file, dest, file_key, nonce, aad,
+                    initial=payload_header, progress_callback=progress_callback,
+                )
                 dest.write(tag)
 
 
@@ -616,8 +635,11 @@ def decrypt_file(
     overwrite: bool = False,
     mode: ModeLiteral | None = None,
     volume_selector: Literal["main", "decoy"] = "main",
+    progress_callback: ProgressCallback | None = None,
+    keyfile_material: bytes | None = None,
 ) -> None:
     """Decrypt a container to an output file."""
+    logger.info("Decrypting %s -> %s (volume=%s)", container_path, out_path, volume_selector)
     if not container_path.exists():
         raise FileNotFoundError(container_path)
 
@@ -645,7 +667,7 @@ def decrypt_file(
         if ciphertext_len < 0:
             raise ContainerFormatError("Invalid payload length")
 
-        file_key = _decrypt_volume(descriptor, password, resolved_mode=resolved_mode)
+        file_key = _decrypt_volume(descriptor, password, resolved_mode=resolved_mode, keyfile_material=keyfile_material)
 
         writer = _PayloadWriter(out_path)
         f.seek(descriptor.payload_offset)
@@ -656,6 +678,7 @@ def decrypt_file(
             descriptor.nonce_aes_gcm,
             aad,
             ciphertext_len,
+            progress_callback=progress_callback,
         )
 
 

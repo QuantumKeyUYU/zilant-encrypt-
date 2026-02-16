@@ -5,6 +5,27 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .[dev]
+
+      - name: Run pre-commit
+        run: pre-commit run --all-files
+
   test:
     name: Test (${{ matrix.os }} / Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
@@ -12,7 +33,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.11"]
+        python-version: ["3.11", "3.12"]
 
     steps:
       - name: Checkout
@@ -28,13 +49,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install .[dev]
-
-      # pre-commit гоняем только на ubuntu и не даём ему завалить весь джоб
-      - name: Run pre-commit (non-blocking on CI)
-        if: matrix.os == 'ubuntu-latest'
-        shell: bash
-        run: |
-          pre-commit run --all-files || echo "pre-commit reported changes (CI does not fail on this step)."
 
       - name: Run tests
         env:
