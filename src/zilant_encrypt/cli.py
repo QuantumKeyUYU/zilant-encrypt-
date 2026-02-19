@@ -48,8 +48,15 @@ PQ_ERROR_MESSAGE = "Error: container requires PQ support (oqs) which is not avai
 console = Console()
 
 
-def _prompt_password(password_opt: str | None, *, confirm: bool = False) -> str:
+def _prompt_password(password_opt: str | None, *, confirm: bool = False, warn_cmdline: bool = False) -> str:
     if password_opt is not None:
+        if warn_cmdline:
+            # Passwords passed on the command line are visible in process lists
+            # (ps, /proc/*/cmdline) and shell history – warn the user.
+            console.print(
+                "[yellow]Security notice: password supplied on command line is visible "
+                "in process lists and shell history. Prefer interactive prompt.[/yellow]"
+            )
         return password_opt
     password = getpass.getpass("Password: ")
     if confirm:
@@ -60,20 +67,32 @@ def _prompt_password(password_opt: str | None, *, confirm: bool = False) -> str:
 
 
 def _check_password_strength(password: str, *, is_encrypt: bool = False) -> None:
-    """Show password strength feedback during encryption."""
+    """Show password strength feedback during encryption.
+
+    Warns but does NOT abort for weak passwords – the user may have a valid
+    reason (e.g. testing, scripted environments).  The original behaviour of
+    silently accepting passwords when ``--password`` was given is preserved so
+    that existing scripts continue to work.
+    """
     if not is_encrypt:
         return
-    try:
-        strength = validate_password(password)
-        if strength.level == "weak":
-            console.print(f"[yellow]Warning: weak password ({strength.score}/100)[/yellow]")
-            for tip in strength.feedback:
-                console.print(f"[yellow]  - {tip}[/yellow]")
-        elif strength.level == "fair":
-            console.print(f"[yellow]Password strength: fair ({strength.score}/100)[/yellow]")
-    except WeakPasswordError as exc:
-        console.print(f"[red]Error: {exc}[/red]")
-        raise click.Abort() from exc
+    # evaluate_password never raises; it just scores.
+    strength = evaluate_password(password)
+    entropy_note = f", ~{strength.entropy_bits:.0f} bits entropy"
+    if strength.level == "weak":
+        console.print(
+            f"[yellow]Warning: weak password ({strength.score}/100{entropy_note})[/yellow]"
+        )
+        for tip in strength.feedback:
+            console.print(f"[yellow]  - {tip}[/yellow]")
+    elif strength.level == "fair":
+        console.print(
+            f"[yellow]Password strength: fair ({strength.score}/100{entropy_note})[/yellow]"
+        )
+    elif strength.level == "good":
+        console.print(
+            f"[green]Password strength: good ({strength.score}/100{entropy_note})[/green]"
+        )
 
 
 class _cli_progress:
@@ -348,9 +367,8 @@ def encrypt(
     argon_parallelism: int | None,
     keyfile_path: Path | None,
 ) -> None:
-    password = _prompt_password(password_opt, confirm=password_opt is None)
-    if password_opt is None:
-        _check_password_strength(password, is_encrypt=True)
+    password = _prompt_password(password_opt, confirm=password_opt is None, warn_cmdline=password_opt is not None)
+    _check_password_strength(password, is_encrypt=True)
     kf_material = derive_keyfile_material(keyfile_path) if keyfile_path else None
     target = output_path or input_path.with_suffix(f"{input_path.suffix}.zil")
     normalized_mode = cast(ModeLiteral, _normalized_mode(mode, default_to_password=True))
@@ -485,7 +503,7 @@ def decrypt(
     volume: str | None,
     keyfile_path: Path | None,
 ) -> None:
-    password = _prompt_password(password_opt)
+    password = _prompt_password(password_opt, warn_cmdline=password_opt is not None)
     kf_material = derive_keyfile_material(keyfile_path) if keyfile_path else None
     out_path = output_path or container.with_suffix(container.suffix + ".out")
 

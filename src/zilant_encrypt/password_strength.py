@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import math
 import re
-import string
 from dataclasses import dataclass
 from typing import Literal
 
@@ -11,6 +10,30 @@ MIN_PASSWORD_LENGTH = 8
 RECOMMENDED_PASSWORD_LENGTH = 12
 
 StrengthLevel = Literal["weak", "fair", "good", "strong"]
+
+# Top-100 most breached passwords (NIST SP 800-63B guidance).
+# Checked case-insensitively so "Password1" also matches "password1".
+_COMMON_PASSWORDS: frozenset[str] = frozenset(
+    {
+        "password", "password1", "password123", "123456", "12345678", "123456789",
+        "1234567890", "qwerty", "qwerty123", "qwertyuiop", "abc123", "iloveyou",
+        "admin", "letmein", "welcome", "monkey", "dragon", "master", "sunshine",
+        "princess", "shadow", "superman", "michael", "football", "baseball",
+        "soccer", "hockey", "batman", "trustno1", "hello", "passw0rd", "pass",
+        "test", "root", "login", "access", "azerty", "111111", "1111111",
+        "000000", "696969", "654321", "121212", "666666", "555555", "123123",
+        "112233", "11111111", "1234567", "12345", "1234", "123", "1q2w3e4r",
+        "1q2w3e", "zxcvbnm", "qazwsx", "q1w2e3r4", "asdfgh", "asdfghjkl",
+        "hunter2", "starwars", "whatever", "charlie", "donald", "password2",
+        "matrix", "computer", "internet", "flower", "cheese", "lovely",
+        "jessica", "michelle", "daniel", "george", "jordan", "harley",
+        "ranger", "dakota", "robert", "thomas", "andrea", "maggie", "summer",
+        "taylor", "andrew", "jessica", "hunter", "joshua", "pepper", "austin",
+        "ginger", "buster", "cookie", "biteme", "snoopy", "tigger", "oliver",
+        "thomas", "william", "jennifer", "asshole", "fuckyou", "fucku",
+        "sexy", "mustang", "maverick", "thunder",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -30,7 +53,7 @@ class WeakPasswordError(ValueError):
 
 
 def estimate_entropy(password: str) -> float:
-    """Estimate password entropy in bits."""
+    """Estimate password entropy in bits based on character-set size."""
     if not password:
         return 0.0
 
@@ -50,6 +73,11 @@ def estimate_entropy(password: str) -> float:
     return len(password) * math.log2(charset_size)
 
 
+def _is_common_password(password: str) -> bool:
+    """Return True if the password appears in the known-breached list."""
+    return password.lower() in _COMMON_PASSWORDS
+
+
 def evaluate_password(password: str) -> PasswordStrength:
     """Evaluate password strength and return detailed feedback."""
     feedback: list[str] = []
@@ -66,25 +94,39 @@ def evaluate_password(password: str) -> PasswordStrength:
     if char_classes < 2:
         feedback.append("Use a mix of uppercase, lowercase, digits, and symbols")
 
-    # Check for common patterns
+    # Check for trivially crackable patterns
     if re.match(r"^(.)\1+$", password):
-        feedback.append("Password must not be a repeated character")
+        feedback.append("Password must not be a single repeated character")
 
-    if re.match(r"^(012|123|234|345|456|567|678|789|abc|bcd|cde|def|xyz)", password.lower()):
-        feedback.append("Avoid sequential characters")
+    if re.search(r"(012|123|234|345|456|567|678|789|890|abc|bcd|cde|def|efg|xyz)", password.lower()):
+        feedback.append("Avoid sequential characters (e.g. 123, abc)")
+
+    # Check against known breached passwords
+    is_common = _is_common_password(password)
+    if is_common:
+        feedback.append("This password is extremely common and easily guessed – choose a unique one")
 
     entropy = estimate_entropy(password)
 
-    # Score calculation
+    # Score calculation (0-100)
     score = 0
-    score += min(30, len(password) * 3)  # length contribution
-    score += min(25, char_classes * 8)  # diversity contribution
-    score += min(25, entropy / 3)  # entropy contribution
+    score += min(30, len(password) * 3)   # length: up to 10 chars gets full points
+    score += min(20, char_classes * 6)    # diversity: 4 classes = 24 pts, capped at 20
+    score += min(20, int(entropy / 4))    # raw entropy contribution
     if len(password) >= RECOMMENDED_PASSWORD_LENGTH:
         score += 10
     if len(password) >= 16:
         score += 10
-    score = min(100, max(0, int(score)))
+    if len(password) >= 20:
+        score += 10
+
+    # Severe penalties
+    if is_common:
+        score = min(score, 15)
+    if re.match(r"^(.)\1+$", password):
+        score = min(score, 5)
+
+    score = min(100, max(0, score))
 
     if score < 30:
         level: StrengthLevel = "weak"
@@ -106,7 +148,8 @@ def evaluate_password(password: str) -> PasswordStrength:
 def validate_password(password: str, *, allow_weak: bool = False) -> PasswordStrength:
     """Validate password meets minimum requirements.
 
-    Raises WeakPasswordError if the password is too weak and allow_weak is False.
+    Raises :exc:`WeakPasswordError` if the password is too short and
+    *allow_weak* is ``False``.
     """
     if not password:
         raise WeakPasswordError(["Password cannot be empty"])
@@ -114,6 +157,8 @@ def validate_password(password: str, *, allow_weak: bool = False) -> PasswordStr
     strength = evaluate_password(password)
 
     if not allow_weak and len(password) < MIN_PASSWORD_LENGTH:
-        raise WeakPasswordError(strength.feedback or [f"Password must be at least {MIN_PASSWORD_LENGTH} characters"])
+        raise WeakPasswordError(
+            strength.feedback or [f"Password must be at least {MIN_PASSWORD_LENGTH} characters"]
+        )
 
     return strength

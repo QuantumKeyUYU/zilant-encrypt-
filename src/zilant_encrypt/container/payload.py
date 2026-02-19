@@ -24,6 +24,25 @@ MAX_PAYLOAD_META_LEN = 64 * 1024
 STREAM_CHUNK_SIZE = 1024 * 64
 
 
+def _secure_unlink(path: Path) -> None:
+    """Best-effort secure deletion: overwrite with zeros then unlink.
+
+    On modern SSDs and copy-on-write filesystems this cannot guarantee that
+    the old data is gone at the storage layer, but it eliminates the file
+    from the directory and makes casual recovery harder.
+    """
+    try:
+        size = path.stat().st_size
+        if size > 0:
+            with path.open("r+b") as f:
+                f.write(b"\x00" * size)
+                f.flush()
+                os.fsync(f.fileno())
+    except OSError:
+        pass  # best-effort; always unlink regardless
+    path.unlink(missing_ok=True)
+
+
 @dataclass(frozen=True)
 class PayloadMeta:
     kind: Literal["file", "directory"]
@@ -154,6 +173,15 @@ class _PayloadWriter:
             raise ContainerFormatError("Invalid payload metadata")
         if not isinstance(meta_name, str) or not meta_name:
             raise ContainerFormatError("Invalid payload metadata")
+        # Security: reject names that could cause path traversal or be
+        # interpreted as absolute paths when the name is used later.
+        _sanitized = meta_name.replace("\\", "/")
+        if (
+            ".." in _sanitized.split("/")
+            or _sanitized.startswith("/")
+            or (len(_sanitized) >= 2 and _sanitized[1] == ":" and _sanitized[0].isalpha())
+        ):
+            raise ContainerFormatError("Payload metadata name contains unsafe path components")
 
         self.meta = PayloadMeta(kind=meta_type, name=meta_name)
         payload = bytes(self._buffer[total_header:])
@@ -198,7 +226,7 @@ class _PayloadWriter:
                             raise ContainerFormatError("Archive entry escapes target directory")
                     archive.extractall(self.out_path)
             finally:
-                Path(temp_zip.name).unlink(missing_ok=True)
+                _secure_unlink(Path(temp_zip.name))
 
 
 def _build_payload_header(meta: PayloadMeta) -> bytes:
