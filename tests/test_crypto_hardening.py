@@ -17,7 +17,8 @@ def test_invalid_argon_params_rejected_on_derive() -> None:
     params = Argon2Params()
     provider = api.PasswordKeyProvider("pw", salt, params)
     key_ref = provider._ensure_key()
-    wrapped = api.WrappedKey(*api.AesGcmEncryptor.encrypt(key_ref, api.WRAP_NONCE, b"k" * 32, b""))
+    wrap_nonce = api.derive_wrap_nonce(bytes(key_ref), salt, context="password")
+    wrapped = api.WrappedKey(*api.AesGcmEncryptor.encrypt(key_ref, wrap_nonce, b"k" * 32, b""))
 
     descriptor = VolumeDescriptor(
         volume_index=0,
@@ -44,7 +45,8 @@ def test_password_key_zeroized_after_unwrap() -> None:
     params = Argon2Params()
     provider = api.PasswordKeyProvider("pw", salt, params)
     key_ref = provider._ensure_key()
-    wrapped = api.WrappedKey(*api.AesGcmEncryptor.encrypt(key_ref, api.WRAP_NONCE, b"f" * 32, b""))
+    wrap_nonce = api.derive_wrap_nonce(bytes(key_ref), salt, context="password")
+    wrapped = api.WrappedKey(*api.AesGcmEncryptor.encrypt(key_ref, wrap_nonce, b"f" * 32, b""))
 
     unwrapped = provider.unwrap_file_key(wrapped)
 
@@ -109,3 +111,14 @@ def test_legacy_pq_container_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path:
 
     with pytest.raises(InvalidPassword):
         api.decrypt_file(container, output, "secret", mode="pq-hybrid")
+
+
+def test_password_provider_accepts_legacy_zero_nonce_ciphertext() -> None:
+    salt = os.urandom(16)
+    params = Argon2Params()
+    provider = api.PasswordKeyProvider("pw", salt, params)
+    key_ref = provider._ensure_key()
+    legacy_wrapped = api.WrappedKey(*api.AesGcmEncryptor.encrypt(key_ref, api.WRAP_NONCE, b"z" * 32, b""))
+    provider._clear_key()
+
+    assert provider.unwrap_file_key(legacy_wrapped) == b"z" * 32

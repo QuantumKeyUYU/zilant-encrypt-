@@ -3,7 +3,7 @@ import os
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-from zilant_encrypt.container.api import WRAP_NONCE, PasswordKeyProvider, build_volume_descriptor
+from zilant_encrypt.container.api import PasswordKeyProvider, build_volume_descriptor
 from zilant_encrypt.container.format import (
     KEY_MODE_PASSWORD_ONLY,
     KEY_MODE_PQ_HYBRID,
@@ -16,6 +16,7 @@ from zilant_encrypt.container.format import (
 from zilant_encrypt.crypto import pq
 from zilant_encrypt.crypto.aead import AesGcmEncryptor
 from zilant_encrypt.crypto.kdf import Argon2Params, derive_key_from_password
+from zilant_encrypt.container.keymgmt import derive_wrap_nonce
 
 
 def test_build_volume_descriptor_password_regression(monkeypatch) -> None:
@@ -118,8 +119,12 @@ def test_build_volume_descriptor_pq_hybrid_regression(monkeypatch) -> None:
     )
     master_key = hkdf.derive(shared_secret + password_key)
 
-    wrapped_key_data, wrapped_key_tag = AesGcmEncryptor.encrypt(master_key, WRAP_NONCE, file_key, b"")
-    wrapped_secret, wrapped_secret_tag = AesGcmEncryptor.encrypt(password_key, WRAP_NONCE, secret_key, b"")
+    wrapped_key_data, wrapped_key_tag = AesGcmEncryptor.encrypt(
+        master_key, derive_wrap_nonce(master_key, salt, context="filekey"), file_key, b""
+    )
+    wrapped_secret, wrapped_secret_tag = AesGcmEncryptor.encrypt(
+        password_key, derive_wrap_nonce(password_key, salt, context="pq-secret"), secret_key, b""
+    )
 
     expected = VolumeDescriptor(
         volume_index=1,
