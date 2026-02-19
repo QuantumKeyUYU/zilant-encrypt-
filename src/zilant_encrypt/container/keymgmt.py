@@ -21,9 +21,9 @@ from zilant_encrypt.errors import (
 
 logger = logging.getLogger(__name__)
 
-# SECURITY NOTE: WRAP_NONCE is kept for backward-compatibility when reading
-# existing containers. New containers use a fresh random wrap_nonce per volume
-# stored in the header. Never reuse this nonce with the same key.
+# SECURITY NOTE: WRAP_NONCE is a legacy nonce used by pre-v0.2.1 containers.
+# New containers derive a per-key wrap nonce via HKDF and fall back to this
+# constant only when decrypting legacy containers.
 WRAP_NONCE = b"\x00" * 12
 WRAP_NONCE_LEN = 12
 
@@ -36,6 +36,9 @@ ARGON_PARALLELISM_MAX = 8
 
 # Label used for HKDF when combining password key with keyfile material.
 _KEYFILE_HKDF_INFO = b"zilant-keyfile-combine-v1"
+_WRAP_NONCE_INFO_PASSWORD = b"zilant-wrap-nonce-password-v1"
+_WRAP_NONCE_INFO_FILEKEY = b"zilant-wrap-nonce-filekey-v1"
+_WRAP_NONCE_INFO_PQ_SECRET = b"zilant-wrap-nonce-pq-secret-v1"
 
 
 @dataclass(frozen=True)
@@ -96,8 +99,9 @@ class PasswordKeyProvider:
     def wrap_file_key(self, file_key: bytes) -> WrappedKey:
         key = self._ensure_key()
         try:
+            wrap_nonce = derive_wrap_nonce(bytes(key), self.salt, context="password")
             # Cast to bytes because AESGCM expects immutable bytes
-            ciphertext, tag = AesGcmEncryptor.encrypt(bytes(key), WRAP_NONCE, file_key, b"")
+            ciphertext, tag = AesGcmEncryptor.encrypt(bytes(key), wrap_nonce, file_key, b"")
             return WrappedKey(data=ciphertext, tag=tag)
         finally:
             self._clear_key()
@@ -105,12 +109,40 @@ class PasswordKeyProvider:
     def unwrap_file_key(self, wrapped: WrappedKey) -> bytes:
         key = self._ensure_key()
         try:
+            wrap_nonce = derive_wrap_nonce(bytes(key), self.salt, context="password")
             # Cast to bytes because AESGCM expects immutable bytes
-            return AesGcmEncryptor.decrypt(bytes(key), WRAP_NONCE, wrapped.data, wrapped.tag, b"")
+            try:
+                return AesGcmEncryptor.decrypt(bytes(key), wrap_nonce, wrapped.data, wrapped.tag, b"")
+            except InvalidTag:
+                # Backward compatibility for legacy containers created with
+                # fixed zero nonce.
+                return AesGcmEncryptor.decrypt(bytes(key), WRAP_NONCE, wrapped.data, wrapped.tag, b"")
         except InvalidTag as exc:
             raise InvalidPassword("Unable to unwrap file key") from exc
         finally:
             self._clear_key()
+
+
+def derive_wrap_nonce(key_material: bytes, salt: bytes, *, context: Literal["password", "filekey", "pq-secret"]) -> bytes:
+    """Derive a deterministic 96-bit AES-GCM nonce for key wrapping.
+
+    The nonce is bound to keying material + volume salt + purpose label, which
+    prevents accidental nonce reuse with the same wrapping key while avoiding
+    on-disk format changes.
+    """
+    info_map: dict[str, bytes] = {
+        "password": _WRAP_NONCE_INFO_PASSWORD,
+        "filekey": _WRAP_NONCE_INFO_FILEKEY,
+        "pq-secret": _WRAP_NONCE_INFO_PQ_SECRET,
+    }
+    info = info_map[context]
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=WRAP_NONCE_LEN,
+        salt=salt,
+        info=info,
+    )
+    return hkdf.derive(key_material)
 
 
 def _validate_argon_params(params: Argon2Params) -> Argon2Params:
@@ -177,6 +209,7 @@ __all__ = [
     "WrappedKey",
     "WRAP_NONCE",
     "WRAP_NONCE_LEN",
+    "derive_wrap_nonce",
     "_validate_argon_params",
     "_validate_decrypt_argon_params",
     "_validate_pq_available",

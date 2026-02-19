@@ -36,6 +36,7 @@ from zilant_encrypt.container.keymgmt import (
     WRAP_NONCE,
     PasswordKeyProvider,
     WrappedKey,
+    derive_wrap_nonce,
     _validate_decrypt_argon_params,
     _validate_pq_available,
     _zeroize,
@@ -167,13 +168,22 @@ def _decrypt_volume(
             try:
                 raw_kem = AesGcmEncryptor.decrypt(
                     bytes(password_key),
-                    WRAP_NONCE,
+                    derive_wrap_nonce(bytes(password_key), descriptor.salt_argon2, context="pq-secret"),
                     descriptor.pq_wrapped_secret,
                     descriptor.pq_wrapped_secret_tag,
                     b"",
                 )
-            except InvalidTag as exc:
-                raise InvalidPassword("Unable to unwrap KEM secret key") from exc
+            except InvalidTag:
+                try:
+                    raw_kem = AesGcmEncryptor.decrypt(
+                        bytes(password_key),
+                        WRAP_NONCE,
+                        descriptor.pq_wrapped_secret,
+                        descriptor.pq_wrapped_secret_tag,
+                        b"",
+                    )
+                except InvalidTag as exc:
+                    raise InvalidPassword("Unable to unwrap KEM secret key") from exc
 
             kem_secret_ba = bytearray(raw_kem)
             del raw_kem
@@ -193,13 +203,22 @@ def _decrypt_volume(
             try:
                 return AesGcmEncryptor.decrypt(
                     bytes(master_key),
-                    WRAP_NONCE,
+                    derive_wrap_nonce(bytes(master_key), descriptor.salt_argon2, context="filekey"),
                     descriptor.wrapped_key,
                     descriptor.wrapped_key_tag,
                     b"",
                 )
-            except InvalidTag as exc:
-                raise InvalidPassword("Unable to unwrap file key") from exc
+            except InvalidTag:
+                try:
+                    return AesGcmEncryptor.decrypt(
+                        bytes(master_key),
+                        WRAP_NONCE,
+                        descriptor.wrapped_key,
+                        descriptor.wrapped_key_tag,
+                        b"",
+                    )
+                except InvalidTag as exc:
+                    raise InvalidPassword("Unable to unwrap file key") from exc
         finally:
             _zeroize(password_key)
             _zeroize(kem_secret_ba)
@@ -297,10 +316,13 @@ def build_volume_descriptor(
             master_key = bytearray(hkdf.derive(bytes(shared_secret_ba) + bytes(password_key)))
 
             wrapped_key_data, wrapped_key_tag = AesGcmEncryptor.encrypt(
-                bytes(master_key), WRAP_NONCE, file_key, b""
+                bytes(master_key), derive_wrap_nonce(bytes(master_key), salt, context="filekey"), file_key, b""
             )
             wrapped_secret, wrapped_secret_tag = AesGcmEncryptor.encrypt(
-                bytes(password_key), WRAP_NONCE, bytes(secret_key_ba), b""
+                bytes(password_key),
+                derive_wrap_nonce(bytes(password_key), salt, context="pq-secret"),
+                bytes(secret_key_ba),
+                b"",
             )
         finally:
             _zeroize(secret_key_ba)

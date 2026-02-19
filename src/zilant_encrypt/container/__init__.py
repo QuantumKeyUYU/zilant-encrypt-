@@ -31,7 +31,7 @@ from zilant_encrypt.container.format import (
     KEY_MODE_PQ_HYBRID,
     read_header_from_stream,
 )
-from zilant_encrypt.container.keymgmt import WRAP_NONCE, PasswordKeyProvider, WrappedKey
+from zilant_encrypt.container.keymgmt import WRAP_NONCE, PasswordKeyProvider, WrappedKey, derive_wrap_nonce
 from zilant_encrypt.container.payload import (
     MAX_PAYLOAD_META_LEN,
     PAYLOAD_MAGIC,
@@ -63,6 +63,7 @@ __all__ = [
     "VolumeLayout",
     "WrappedKey",
     "WRAP_NONCE",
+    "derive_wrap_nonce",
     "build_volume_descriptor",
     "check_container",
     "decrypt_auto_volume",
