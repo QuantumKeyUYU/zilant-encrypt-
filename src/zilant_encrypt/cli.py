@@ -8,7 +8,14 @@ from typing import Callable, Literal, cast
 
 import click
 from rich.console import Console
-from rich.progress import BarColumn, DownloadColumn, Progress, TextColumn, TransferSpeedColumn
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    TaskID,
+    TextColumn,
+    TransferSpeedColumn,
+)
 from rich.table import Table
 
 from zilant_encrypt import __version__
@@ -102,7 +109,7 @@ class _cli_progress:
         self._description = description
         self._total = total
         self._progress: Progress | None = None
-        self._task_id: int | None = None
+        self._task_id: TaskID | None = None
 
     def __enter__(self) -> Callable[[int], None]:
         if self._total > 0:
@@ -124,6 +131,7 @@ class _cli_progress:
     def __exit__(self, *args: object) -> None:
         if self._progress is not None:
             self._progress.stop()
+
 
 
 def _human_size(num_bytes: int) -> str:

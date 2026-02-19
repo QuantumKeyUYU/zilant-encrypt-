@@ -3,11 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from zilant_encrypt.password_strength import (
-    WeakPasswordError,
-    evaluate_password,
-    validate_password,
-)
+from zilant_encrypt.password_strength import WeakPasswordError, evaluate_password, validate_password
 
 
 def test_empty_password_rejected() -> None:

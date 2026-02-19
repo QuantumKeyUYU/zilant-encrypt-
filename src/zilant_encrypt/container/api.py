@@ -10,11 +10,7 @@ from zilant_encrypt.container import *  # noqa: F401, F403
 from zilant_encrypt.container import __all__ as _container_all
 
 # Also re-export internal helpers that existing tests rely on
-from zilant_encrypt.container.core import (
-    _decrypt_volume,
-    _derive_file_key,
-    _ensure_output,
-)
+from zilant_encrypt.container.core import _decrypt_volume, _derive_file_key, _ensure_output
 from zilant_encrypt.container.format import RESERVED_LEN
 from zilant_encrypt.container.keymgmt import (
     _validate_argon_params,

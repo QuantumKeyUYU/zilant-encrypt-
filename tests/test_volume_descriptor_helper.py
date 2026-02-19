@@ -13,10 +13,10 @@ from zilant_encrypt.container.format import (
     WRAPPED_KEY_TAG_LEN,
     VolumeDescriptor,
 )
+from zilant_encrypt.container.keymgmt import derive_wrap_nonce
 from zilant_encrypt.crypto import pq
 from zilant_encrypt.crypto.aead import AesGcmEncryptor
 from zilant_encrypt.crypto.kdf import Argon2Params, derive_key_from_password
-from zilant_encrypt.container.keymgmt import derive_wrap_nonce
 
 
 def test_build_volume_descriptor_password_regression(monkeypatch) -> None:
