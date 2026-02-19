@@ -5,9 +5,9 @@ import logging
 from dataclasses import dataclass
 from typing import Literal
 
-logger = logging.getLogger(__name__)
-
 from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from zilant_encrypt.crypto import pq
 from zilant_encrypt.crypto.aead import AesGcmEncryptor
@@ -19,13 +19,23 @@ from zilant_encrypt.errors import (
     UnsupportedFeatureError,
 )
 
+logger = logging.getLogger(__name__)
+
+# SECURITY NOTE: WRAP_NONCE is kept for backward-compatibility when reading
+# existing containers. New containers use a fresh random wrap_nonce per volume
+# stored in the header. Never reuse this nonce with the same key.
 WRAP_NONCE = b"\x00" * 12
+WRAP_NONCE_LEN = 12
+
 ARGON_MEM_MIN_KIB = 32 * 1024
 ARGON_MEM_MAX_KIB = 2 * 1024 * 1024
 ARGON_TIME_MIN = 1
-ARGON_TIME_MAX = 10
+ARGON_TIME_MAX = 100  # raised from 10 – allow stronger configurations
 ARGON_PARALLELISM_MIN = 1
 ARGON_PARALLELISM_MAX = 8
+
+# Label used for HKDF when combining password key with keyfile material.
+_KEYFILE_HKDF_INFO = b"zilant-keyfile-combine-v1"
 
 
 @dataclass(frozen=True)
@@ -66,8 +76,16 @@ class PasswordKeyProvider:
                 parallelism=self.params.parallelism,
             )
             if self._keyfile_material is not None:
-                # XOR password-derived key with keyfile material
-                raw_key = bytes(a ^ b for a, b in zip(raw_key, self._keyfile_material))
+                # Combine via HKDF-Expand instead of XOR.
+                # HKDF provides better domain separation and avoids the XOR
+                # weakness where knowing one input reveals the other.
+                hkdf = HKDF(
+                    algorithm=hashes.SHA256(),
+                    length=32,
+                    salt=self.salt,
+                    info=_KEYFILE_HKDF_INFO,
+                )
+                raw_key = hkdf.derive(raw_key + self._keyfile_material)
             self._password_key = bytearray(raw_key)
         return self._password_key
 
@@ -158,6 +176,7 @@ __all__ = [
     "PasswordKeyProvider",
     "WrappedKey",
     "WRAP_NONCE",
+    "WRAP_NONCE_LEN",
     "_validate_argon_params",
     "_validate_decrypt_argon_params",
     "_validate_pq_available",

@@ -50,53 +50,84 @@ try:
 except Exception:
     _DECRYPT_AUTO_SUPPORTS_OVERWRITE = False
 
-# --- "SILICON VALLEY" THEME CONFIGURATION ---
-THEME = {
-    # Deep, expensive dark tones
-    "bg_app": "#09090B",        # Almost black (Zinc-950)
-    "bg_panel": "#141417",      # Slightly lighter
-    "bg_input": "#1C1C1F",      # Input background
-    "bg_hover": "#27272A",      # Input hover
+# ---------------------------------------------------------------------------
+# THEMES
+# ---------------------------------------------------------------------------
 
-    # Borders
-    "border_dim": "#27272A",
+# "Dark Zinc" — deep professional dark (original)
+THEME_DARK: dict[str, str] = {
+    "bg_app":        "#09090B",
+    "bg_panel":      "#141417",
+    "bg_input":      "#1C1C1F",
+    "bg_hover":      "#27272A",
+    "border_dim":    "#27272A",
     "border_active": "#3F3F46",
-
-    # Typography
-    "text_main": "#FAFAFA",     # Pure white
-    "text_sec": "#A1A1AA",      # Zinc-400
-    "text_dim": "#52525B",      # Zinc-600
-
-    # Gradients (Simulated via QSS)
-    "accent_blue": "#3B82F6",   # Encrypt Primary
-    "accent_cyan": "#06B6D4",   # Encrypt Secondary (Gradient target)
-    "accent_purp": "#8B5CF6",   # Decrypt Primary
-    "accent_pink": "#EC4899",   # Decrypt Secondary
-
-    "success": "#10B981",       # Emerald
-    "error": "#EF4444",         # Red
+    "text_main":     "#FAFAFA",
+    "text_sec":      "#A1A1AA",
+    "text_dim":      "#52525B",
+    "accent_blue":   "#3B82F6",
+    "accent_cyan":   "#06B6D4",
+    "accent_purp":   "#8B5CF6",
+    "accent_pink":   "#EC4899",
+    "success":       "#10B981",
+    "error":         "#EF4444",
 }
 
+# "Apple Light" — iOS-inspired clean light theme
+THEME_LIGHT: dict[str, str] = {
+    "bg_app":        "#F2F2F7",   # iOS system grouped background
+    "bg_panel":      "#FFFFFF",   # White cards
+    "bg_input":      "#FFFFFF",   # White inputs
+    "bg_hover":      "#E9E9EF",   # Slight press state
+    "border_dim":    "#E5E5EA",   # iOS separator
+    "border_active": "#C7C7CC",   # iOS separator dark
+    "text_main":     "#1C1C1E",   # iOS label
+    "text_sec":      "#6D6D72",   # iOS secondary label
+    "text_dim":      "#AEAEB2",   # iOS tertiary label
+    "accent_blue":   "#007AFF",   # iOS system blue
+    "accent_cyan":   "#32ADE6",   # iOS system teal
+    "accent_purp":   "#AF52DE",   # iOS system purple
+    "accent_pink":   "#FF2D55",   # iOS system pink
+    "success":       "#34C759",   # iOS system green
+    "error":         "#FF3B30",   # iOS system red
+}
+
+# Active theme — modified at runtime by theme toggle
+THEME: dict[str, str] = THEME_DARK
+
 FONT_FAMILY = (
-    "Segoe UI Variable Display, Segoe UI, Inter, Roboto, Helvetica, sans-serif"
+    "SF Pro Display, SF Pro Text, -apple-system, "
+    "Segoe UI Variable Display, Segoe UI, Inter, Helvetica Neue, sans-serif"
 )
 
-STYLESHEET = f"""
-/* GLOBAL RESET */
+def _build_stylesheet(t: dict[str, str]) -> str:
+    """Build a complete QSS stylesheet from a theme dict."""
+    # Determine if this is a light theme to adjust a few specific rules
+    is_light = t["bg_app"] > "#888888"  # light backgrounds are higher in hex
+    btn_hover_bg = t["bg_hover"] if is_light else "#3F3F46"
+    btn_hover_border = t["border_active"] if is_light else "#52525B"
+    input_focus_color = t["text_main"] if is_light else "white"
+    ghost_hover_color = t["text_main"] if is_light else "white"
+    btn_radius = "12px" if is_light else "8px"
+    primary_radius = "22px" if is_light else "12px"
+    combobox_bg = t["bg_panel"] if is_light else t["bg_hover"]
+
+    return f"""
+/* ── GLOBAL RESET ─────────────────────────────────────────────────────── */
 * {{
     font-family: "{FONT_FAMILY}";
     font-size: 14px;
     outline: none;
-    color: {THEME['text_main']};
+    color: {t['text_main']};
     border: none;
 }}
 
 QMainWindow, QWidget#Content {{
-    background-color: {THEME['bg_app']};
+    background-color: {t['bg_app']};
 }}
 
-/* TYPOGRAPHY */
-QLabel {{ color: {THEME['text_main']}; }}
+/* ── TYPOGRAPHY ────────────────────────────────────────────────────────── */
+QLabel {{ color: {t['text_main']}; background: transparent; }}
 QLabel#H1 {{
     font-size: 26px;
     font-weight: 800;
@@ -104,124 +135,167 @@ QLabel#H1 {{
     background-color: transparent;
 }}
 QLabel#Subtitle {{
-    color: {THEME['text_sec']};
+    color: {t['text_sec']};
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 400;
     margin-bottom: 10px;
 }}
 QLabel#H2 {{
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 700;
-    color: {THEME['text_sec']};
+    color: {t['text_dim']};
     text-transform: uppercase;
-    letter-spacing: 1px;
+    letter-spacing: 1.2px;
     margin-top: 4px;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
 }}
 QLabel#Tip {{
-    color: {THEME['text_dim']};
+    color: {t['text_dim']};
     font-size: 12px;
-    font-style: italic;
 }}
 
-/* PANELS (CARDS) */
+/* ── CARDS ─────────────────────────────────────────────────────────────── */
 QGroupBox {{
-    background-color: {THEME['bg_panel']};
-    border: 1px solid {THEME['border_dim']};
-    border-radius: 16px;
+    background-color: {t['bg_panel']};
+    border: 1px solid {t['border_dim']};
+    border-radius: 18px;
     margin-top: 1.2em;
-    padding: 24px;
+    padding: 24px 24px 20px 24px;
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
     subcontrol-position: top left;
     left: 20px;
-    padding: 0 5px;
-    color: {THEME['accent_blue']};
+    padding: 0 6px;
+    color: {t['accent_blue']};
     font-weight: 700;
-    font-size: 12px;
+    font-size: 11px;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
 }}
 
-/* INPUT FIELDS */
+/* ── INPUT FIELDS ──────────────────────────────────────────────────────── */
 QLineEdit {{
-    background-color: {THEME['bg_input']};
-    border: 1px solid {THEME['border_dim']};
-    border-radius: 10px;
-    padding: 12px 16px;
+    background-color: {t['bg_input']};
+    border: 1.5px solid {t['border_dim']};
+    border-radius: 11px;
+    padding: 11px 16px;
     font-size: 14px;
-    selection-background-color: {THEME['accent_blue']};
+    selection-background-color: {t['accent_blue']};
+    color: {t['text_main']};
 }}
 QLineEdit:hover {{
-    background-color: {THEME['bg_hover']};
-    border: 1px solid {THEME['border_active']};
+    border: 1.5px solid {t['border_active']};
 }}
 QLineEdit:focus {{
-    background-color: {THEME['bg_input']};
-    border: 1px solid {THEME['accent_blue']};
-    color: white;
+    border: 2px solid {t['accent_blue']};
+    color: {input_focus_color};
 }}
 QLineEdit:disabled {{
-    background-color: {THEME['bg_app']};
-    color: {THEME['text_dim']};
-    border: 1px dashed {THEME['border_dim']};
+    background-color: {t['bg_app']};
+    color: {t['text_dim']};
+    border: 1px dashed {t['border_dim']};
 }}
 
-/* TEXT AREA (LOG) */
+/* ── LOG / TEXT AREA ───────────────────────────────────────────────────── */
 QPlainTextEdit {{
-    background-color: {THEME['bg_input']};
-    border: 1px solid {THEME['border_dim']};
-    border-radius: 12px;
+    background-color: {t['bg_input']};
+    border: 1px solid {t['border_dim']};
+    border-radius: 14px;
     padding: 16px;
-    font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
     font-size: 13px;
-    line-height: 1.4;
-    color: {THEME['text_sec']};
+    color: {t['text_sec']};
 }}
 
-/* BUTTONS */
+/* ── BUTTONS ───────────────────────────────────────────────────────────── */
 QPushButton {{
-    background-color: {THEME['bg_hover']};
-    border: 1px solid {THEME['border_active']};
-    border-radius: 8px;
-    padding: 10px 18px;
+    background-color: {t['bg_hover']};
+    border: 1px solid {t['border_active']};
+    border-radius: {btn_radius};
+    padding: 9px 18px;
     font-weight: 600;
     font-size: 13px;
+    color: {t['text_main']};
 }}
 QPushButton:hover {{
-    background-color: #3F3F46;
-    border-color: #52525B;
+    background-color: {btn_hover_bg};
+    border-color: {btn_hover_border};
 }}
-QPushButton:pressed {{ background-color: {THEME['bg_app']}; }}
+QPushButton:pressed {{
+    background-color: {t['bg_app']};
+    opacity: 0.8;
+}}
 
-/* PRIMARY ACTION BUTTON - Gradient & Glow */
+/* Primary CTA – iOS pill shape */
 QPushButton#PrimaryButton {{
-    background-color: {THEME['accent_blue']};
+    background-color: {t['accent_blue']};
     border: none;
     color: white;
     font-size: 16px;
-    font-weight: 800;
-    letter-spacing: 0.5px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
     padding: 16px 32px;
-    border-radius: 12px;
+    border-radius: {primary_radius};
 }}
 QPushButton#PrimaryButton:hover {{
-    margin-top: -1px;
-    margin-bottom: 1px;
+    opacity: 0.92;
+}}
+QPushButton#PrimaryButton:disabled {{
+    background-color: {t['border_active']};
+    color: {t['text_dim']};
 }}
 
-/* GHOST BUTTON */
+/* Ghost/link button */
 QPushButton#GhostButton {{
     background: transparent;
     border: none;
-    color: {THEME['text_sec']};
+    color: {t['accent_blue']};
+    font-weight: 500;
     text-align: right;
 }}
-QPushButton#GhostButton:hover {{ color: white; text-decoration: underline; }}
+QPushButton#GhostButton:hover {{
+    color: {ghost_hover_color};
+    text-decoration: underline;
+}}
 
-/* CHECKBOX & RADIO */
+/* Theme toggle button */
+QPushButton#ThemeToggle {{
+    background: transparent;
+    border: 1.5px solid {t['border_active']};
+    border-radius: 10px;
+    padding: 6px 12px;
+    font-size: 16px;
+    color: {t['text_sec']};
+}}
+QPushButton#ThemeToggle:hover {{
+    background: {t['bg_hover']};
+    color: {t['text_main']};
+}}
+
+/* ── COMBOBOX ──────────────────────────────────────────────────────────── */
+QComboBox {{
+    background-color: {combobox_bg};
+    border: 1px solid {t['border_active']};
+    border-radius: 10px;
+    padding: 7px 12px;
+    font-size: 13px;
+    color: {t['text_main']};
+}}
+QComboBox::drop-down {{ border: none; width: 20px; }}
+QComboBox QAbstractItemView {{
+    background-color: {t['bg_panel']};
+    border: 1px solid {t['border_active']};
+    border-radius: 10px;
+    color: {t['text_main']};
+    selection-background-color: {t['accent_blue']};
+    selection-color: white;
+}}
+
+/* ── CHECKBOX & RADIO ──────────────────────────────────────────────────── */
 QRadioButton, QCheckBox {{
-    spacing: 12px;
-    color: {THEME['text_main']};
+    spacing: 10px;
+    color: {t['text_main']};
     font-size: 14px;
     font-weight: 400;
 }}
@@ -229,56 +303,71 @@ QRadioButton::indicator, QCheckBox::indicator {{
     width: 20px;
     height: 20px;
     border-radius: 10px;
-    border: 2px solid {THEME['border_active']};
-    background-color: {THEME['bg_input']};
+    border: 2px solid {t['border_active']};
+    background-color: {t['bg_input']};
 }}
 QCheckBox::indicator {{ border-radius: 6px; }}
-
 QRadioButton::indicator:checked, QCheckBox::indicator:checked {{
-    border-color: {THEME['accent_blue']};
-    background-color: {THEME['accent_blue']};
-    image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E");
+    border-color: {t['accent_blue']};
+    background-color: {t['accent_blue']};
 }}
 QRadioButton::indicator:checked {{
-    image: none;
-    background-color: {THEME['accent_blue']};
-    border: 5px solid {THEME['bg_input']};
+    border: 5px solid {t['bg_input']};
+    background-color: {t['accent_blue']};
 }}
 
-/* TABS */
-QTabWidget::pane {{ border: none; }}
+/* ── TABS ──────────────────────────────────────────────────────────────── */
+QTabWidget::pane {{ border: none; background: transparent; }}
+QTabBar {{
+    background: transparent;
+}}
 QTabBar::tab {{
     background: transparent;
-    color: {THEME['text_dim']};
-    padding: 12px 24px;
+    color: {t['text_dim']};
+    padding: 10px 22px;
     font-size: 14px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    border-bottom: 3px solid transparent;
-    margin-right: 10px;
+    font-weight: 600;
+    border-bottom: 2px solid transparent;
+    margin-right: 4px;
 }}
-QTabBar::tab:hover {{ color: {THEME['text_sec']}; }}
+QTabBar::tab:hover {{ color: {t['text_sec']}; }}
 QTabBar::tab:selected {{
-    color: {THEME['text_main']};
-    border-bottom: 3px solid {THEME['accent_blue']};
+    color: {t['accent_blue']};
+    border-bottom: 2px solid {t['accent_blue']};
+    font-weight: 700;
 }}
 
-/* SCROLLBAR */
+/* ── SCROLLBAR ─────────────────────────────────────────────────────────── */
 QScrollBar:vertical {{
-    background: {THEME['bg_app']};
-    width: 10px;
-    margin: 0;
+    background: {t['bg_app']};
+    width: 8px;
+    margin: 4px 2px;
 }}
 QScrollBar::handle:vertical {{
-    background: {THEME['bg_hover']};
-    min-height: 40px;
-    border-radius: 5px;
-    border: 2px solid {THEME['bg_app']};
+    background: {t['border_active']};
+    min-height: 36px;
+    border-radius: 4px;
 }}
-QScrollBar::handle:vertical:hover {{ background: {THEME['text_dim']}; }}
+QScrollBar::handle:vertical:hover {{ background: {t['text_dim']}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+
+/* ── PROGRESS BAR ──────────────────────────────────────────────────────── */
+QProgressBar {{
+    background-color: {t['border_dim']};
+    border: none;
+    border-radius: 4px;
+    text-align: center;
+    color: transparent;
+}}
+QProgressBar::chunk {{
+    background-color: {t['accent_blue']};
+    border-radius: 4px;
+}}
 """
+
+
+# Module-level default (dark) — ZilantWindow rebuilds on theme toggle
+STYLESHEET = _build_stylesheet(THEME_DARK)
 
 
 def _detect_lang() -> Lang:
@@ -380,6 +469,7 @@ if QT_AVAILABLE:
             self._worker: TaskWorker | None = None
             self._output_path: Path | None = None
             self._temp_report: str | None = None
+            self._is_dark_mode: bool = True
 
             container = QtWidgets.QWidget()
             container.setObjectName("Content")
@@ -466,15 +556,38 @@ if QT_AVAILABLE:
             self.combo_lang.setCurrentIndex(1 if self._lang == "ru" else 0)
             self.combo_lang.currentIndexChanged.connect(self._on_lang_changed)
 
+            self.btn_theme = QtWidgets.QPushButton("☀️")
+            self.btn_theme.setObjectName("ThemeToggle")
+            self.btn_theme.setFixedSize(44, 36)
+            self.btn_theme.setToolTip("Switch Light / Dark theme")
+            self.btn_theme.clicked.connect(self._toggle_theme)
+
             self.btn_about = QtWidgets.QPushButton("?")
             self.btn_about.setFixedWidth(40)
             self.btn_about.clicked.connect(self._show_about)
 
             controls.addWidget(self.combo_lang)
+            controls.addWidget(self.btn_theme)
             controls.addWidget(self.btn_about)
             layout.addLayout(controls)
 
             self.main_layout.addWidget(top)
+
+        # ---------- THEME TOGGLE ----------
+
+        def _toggle_theme(self) -> None:
+            """Switch between dark (Zinc) and light (Apple iOS) themes."""
+            global THEME  # noqa: PLW0603
+            self._is_dark_mode = not self._is_dark_mode
+            THEME = THEME_DARK if self._is_dark_mode else THEME_LIGHT
+            self.btn_theme.setText("☀️" if self._is_dark_mode else "🌙")
+            self.setStyleSheet(_build_stylesheet(THEME))
+            # Refresh dynamic inline styles that reference THEME
+            self._update_ui_state()
+            self._update_password_strength(self.txt_pass.text())
+            self.lbl_dot.setStyleSheet(
+                f"color: {THEME['success']}; font-size: 16px;"
+            )
 
         # ---------- ENCRYPT TAB ----------
 
@@ -589,17 +702,8 @@ if QT_AVAILABLE:
             self.password_strength_bar.setValue(0)
             self.password_strength_bar.setFixedHeight(6)
             self.password_strength_bar.setTextVisible(False)
-            self.password_strength_bar.setStyleSheet(f"""
-                QProgressBar {{
-                    background-color: {THEME['bg_input']};
-                    border: none;
-                    border-radius: 3px;
-                }}
-                QProgressBar::chunk {{
-                    background-color: {THEME['text_dim']};
-                    border-radius: 3px;
-                }}
-            """)
+            # No hardcoded inline style — the global stylesheet handles it;
+            # _update_password_strength() updates the chunk color dynamically.
             self.lbl_strength = QtWidgets.QLabel("")
             self.lbl_strength.setObjectName("Tip")
             self.lbl_strength.setFixedWidth(120)
@@ -822,17 +926,21 @@ if QT_AVAILABLE:
                 self.grp_decoy.setVisible(False)
                 self.frm_dec_opts.setVisible(True)
 
-            grad = (
-                f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {c1}, stop:1 {c2})"
-            )
+            # Light theme: solid iOS-style color; Dark theme: gradient
+            if self._is_dark_mode:
+                bg = f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {c1}, stop:1 {c2})"
+                hover_extra = "border: 1px solid rgba(255,255,255,0.3);"
+            else:
+                bg = c1
+                hover_extra = f"background: {c2};"
 
             self.btn_action.setText(text.upper())
             self.btn_action.setStyleSheet(f"""
                 QPushButton#PrimaryButton {{
-                    background: {grad};
+                    background: {bg};
                 }}
                 QPushButton#PrimaryButton:hover {{
-                    border: 1px solid white;
+                    {hover_extra}
                 }}
             """)
 

@@ -5,9 +5,9 @@ from __future__ import annotations
 import io
 
 import pytest
-
 from hypothesis import given
 from hypothesis import strategies as st
+
 from zilant_encrypt.container.format import (
     _HEADER_STRUCT_V3_PREFIX,
     _VOLUME_DESCRIPTOR_STRUCT,
@@ -120,7 +120,10 @@ def _v3_header_with_overlapping_payloads(draw: st.DrawFn) -> bytes:
     meta_second = password_meta(1)
 
     payload_start = _HEADER_STRUCT_V3_PREFIX.size + 2 * _VOLUME_DESCRIPTOR_STRUCT.size + len(meta_first) + len(meta_second)
-    overlap_gap = draw(st.integers(min_value=1, max_value=PAYLOAD_TAG_LEN))
+    # overlap_gap must be strictly less than PAYLOAD_TAG_LEN so that even an
+    # empty payload (payload_length=0) causes a detectable overlap: the second
+    # volume would land inside the authentication-tag region of the first.
+    overlap_gap = draw(st.integers(min_value=1, max_value=PAYLOAD_TAG_LEN - 1))
 
     first_descriptor = _VOLUME_DESCRIPTOR_STRUCT.pack(
         0,

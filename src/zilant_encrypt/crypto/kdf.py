@@ -8,7 +8,7 @@ from argon2.low_level import Type, hash_secret_raw
 
 DEFAULT_MEM_COST_KIB = 64 * 1024  # 64 MiB
 DEFAULT_TIME_COST = 3
-DEFAULT_PARALLELISM = 1
+DEFAULT_PARALLELISM = 4
 DERIVED_KEY_LEN = 32
 SALT_LEN = 16
 

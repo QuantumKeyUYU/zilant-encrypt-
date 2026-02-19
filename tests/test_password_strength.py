@@ -40,3 +40,28 @@ def test_good_password_passes_validation() -> None:
     strength = validate_password("Tr0ub4dor&3!")
     assert strength.level in ("good", "strong")
     assert strength.score > 50
+
+
+def test_common_password_scored_low() -> None:
+    """Well-known breached passwords must receive a very low score."""
+    strength = evaluate_password("password")
+    assert strength.score <= 15
+    assert any("common" in f.lower() or "easily" in f.lower() for f in strength.feedback)
+
+
+def test_common_password_case_insensitive() -> None:
+    """Common password check is case-insensitive."""
+    strength = evaluate_password("PASSWORD")
+    assert strength.score <= 15
+
+
+def test_sequential_chars_feedback() -> None:
+    """Passwords containing obvious sequences get a feedback note."""
+    strength = evaluate_password("abcdefgh")
+    assert any("sequential" in f.lower() for f in strength.feedback)
+
+
+def test_entropy_exposed_in_result() -> None:
+    """PasswordStrength.entropy_bits must be a positive finite number."""
+    strength = evaluate_password("MyS3cur3P@ss!")
+    assert strength.entropy_bits > 0

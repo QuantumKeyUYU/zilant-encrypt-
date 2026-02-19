@@ -28,16 +28,21 @@ def test_derive_keyfile_not_found(tmp_path: Path) -> None:
         derive_keyfile_material(tmp_path / "nonexistent")
 
 
-def test_combine_key_with_keyfile_xor() -> None:
+def test_combine_key_with_keyfile() -> None:
+    """combine_key_with_keyfile must return 32 bytes distinct from both inputs
+    and must be deterministic (same inputs -> same output)."""
     key = bytes(range(32))
     kf = bytes(range(32, 64))
     result = combine_key_with_keyfile(key, kf)
     assert len(result) == 32
     assert result != key
     assert result != kf
-    # XOR is reversible
-    restored = combine_key_with_keyfile(result, kf)
-    assert restored == key
+    # Deterministic: same inputs produce same output
+    result2 = combine_key_with_keyfile(key, kf)
+    assert result == result2
+    # Different inputs produce different output
+    result3 = combine_key_with_keyfile(key, bytes(range(64, 96)))
+    assert result != result3
 
 
 def test_combine_key_wrong_length() -> None:

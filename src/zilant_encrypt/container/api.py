@@ -15,6 +15,7 @@ from zilant_encrypt.container.core import (
     _derive_file_key,
     _ensure_output,
 )
+from zilant_encrypt.container.format import RESERVED_LEN
 from zilant_encrypt.container.keymgmt import (
     _validate_argon_params,
     _validate_decrypt_argon_params,
@@ -33,7 +34,6 @@ from zilant_encrypt.container.payload import (
     _PayloadSource,
     _PayloadWriter,
 )
-from zilant_encrypt.container.format import RESERVED_LEN
 from zilant_encrypt.crypto.aead import TAG_LEN, AesGcmEncryptor
 
 __all__ = [
