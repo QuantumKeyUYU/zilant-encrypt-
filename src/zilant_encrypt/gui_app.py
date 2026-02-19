@@ -50,6 +50,64 @@ try:
 except Exception:
     _DECRYPT_AUTO_SUPPORTS_OVERWRITE = False
 
+OverwriteDecision = Literal["overwrite", "save_as", "auto_rename", "cancel"]
+
+
+def next_available_path(path: Path) -> Path:
+    """Return the first non-existing sibling path using "name (N).ext" suffixes."""
+    if not path.exists():
+        return path
+
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+
+    idx = 1
+    while True:
+        candidate = parent / f"{stem} ({idx}){suffix}"
+        if not candidate.exists():
+            return candidate
+        idx += 1
+
+
+def resolve_output_path(
+    desired_path: Path,
+    *,
+    overwrite_enabled: bool,
+    choose_action: Callable[[Path], OverwriteDecision],
+    choose_save_as: Callable[[Path], Path | None],
+) -> tuple[Path | None, bool]:
+    """Resolve destination path when output already exists.
+
+    Returns (path, effective_overwrite). Path=None means cancel.
+    """
+    current = desired_path
+    effective_overwrite = overwrite_enabled
+
+    while current.exists() and not effective_overwrite:
+        action = choose_action(current)
+
+        if action == "cancel":
+            return None, effective_overwrite
+
+        if action == "overwrite":
+            # Enable overwrite for this run.
+            effective_overwrite = True
+            return current, effective_overwrite
+
+        if action == "auto_rename":
+            current = next_available_path(current)
+            continue
+
+        if action == "save_as":
+            selected = choose_save_as(current)
+            if selected is None:
+                continue
+            current = selected
+            continue
+
+    return current, effective_overwrite
+
 # ---------------------------------------------------------------------------
 # THEMES
 # ---------------------------------------------------------------------------
@@ -1020,6 +1078,56 @@ if QT_AVAILABLE:
             if res:
                 self.wdg_output["txt"].setText(res)
 
+        def _choose_output_path(self, current: Path) -> Path | None:
+            if self.rad_enc.isChecked():
+                res, _ = QtWidgets.QFileDialog.getSaveFileName(
+                    self,
+                    "Save As",
+                    str(current),
+                    filter="Zilant (*.zil)",
+                )
+            else:
+                res = QtWidgets.QFileDialog.getExistingDirectory(
+                    self, "Select Destination"
+                )
+            if not res:
+                return None
+            return Path(res).resolve()
+
+        def _ask_overwrite_action(self, target: Path) -> OverwriteDecision:
+            dlg = QtWidgets.QMessageBox(self)
+            dlg.setWindowTitle("Output already exists")
+            dlg.setText(
+                "The selected output path already exists. Choose how to continue."
+            )
+            dlg.setInformativeText(str(target))
+            dlg.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+
+            btn_overwrite = dlg.addButton(
+                "Overwrite", QtWidgets.QMessageBox.ButtonRole.AcceptRole
+            )
+            btn_save_as = dlg.addButton(
+                "Save As…", QtWidgets.QMessageBox.ButtonRole.ActionRole
+            )
+            btn_auto = dlg.addButton(
+                "Auto-rename", QtWidgets.QMessageBox.ButtonRole.ActionRole
+            )
+            btn_cancel = dlg.addButton(
+                QtWidgets.QMessageBox.StandardButton.Cancel
+            )
+            dlg.exec()
+
+            clicked = dlg.clickedButton()
+            if clicked is btn_overwrite:
+                return "overwrite"
+            if clicked is btn_save_as:
+                return "save_as"
+            if clicked is btn_auto:
+                return "auto_rename"
+            if clicked is btn_cancel:
+                return "cancel"
+            return "cancel"
+
         def _browse_decoy(self) -> None:
             if self.rad_dir.isChecked():
                 res = QtWidgets.QFileDialog.getExistingDirectory(
@@ -1127,12 +1235,41 @@ if QT_AVAILABLE:
                 return
 
             is_enc = self.rad_enc.isChecked()
-            if is_enc and dst.exists() and not self.chk_overwrite.isChecked():
-                ask = QtWidgets.QMessageBox.question(
-                    self, "Overwrite?", f"File exists:\n{dst.name}\n\nOverwrite it?"
+
+            if is_enc and dst.suffix != ".zil":
+                ask_suffix = QtWidgets.QMessageBox.question(
+                    self,
+                    "Append .zil suffix?",
+                    "Encryption output usually uses .zil extension. Append it?",
+                    QtWidgets.QMessageBox.StandardButton.Yes
+                    | QtWidgets.QMessageBox.StandardButton.No
+                    | QtWidgets.QMessageBox.StandardButton.Cancel,
+                    QtWidgets.QMessageBox.StandardButton.Yes,
                 )
-                if ask != QtWidgets.QMessageBox.StandardButton.Yes:
+                if ask_suffix == QtWidgets.QMessageBox.StandardButton.Cancel:
                     return
+                if ask_suffix == QtWidgets.QMessageBox.StandardButton.Yes:
+                    dst = dst.with_name(dst.name + ".zil")
+                    self.wdg_output["txt"].setText(str(dst))
+
+            resolved_dst, effective_ow = resolve_output_path(
+                dst,
+                overwrite_enabled=self.chk_overwrite.isChecked(),
+                choose_action=self._ask_overwrite_action,
+                choose_save_as=self._choose_output_path,
+            )
+            if resolved_dst is None:
+                return
+            dst = resolved_dst
+            self.wdg_output["txt"].setText(str(dst))
+
+            if is_enc and dst.is_dir():
+                self._msg(
+                    "Invalid Output",
+                    "Encryption output must be a file path, not a directory.",
+                    True,
+                )
+                return
 
             mode = normalize_mode(
                 "pq-hybrid" if self.rad_pq.isChecked() else "password"
@@ -1178,7 +1315,7 @@ if QT_AVAILABLE:
                 elif self.rad_d_decoy.isChecked():
                     v_sel = "decoy"
 
-                ow = self.chk_overwrite.isChecked()
+                ow = effective_ow
 
                 def task_dec() -> None:
                     if v_sel:
@@ -1255,6 +1392,20 @@ if QT_AVAILABLE:
             self._set_busy(False)
             self.lbl_dot.setStyleSheet(f"color: {THEME['error']}")
             self.lbl_stat.setText("ERROR")
+            if "Refusing to overwrite existing file" in msg and self._output_path:
+                resolved_dst, effective_ow = resolve_output_path(
+                    self._output_path,
+                    overwrite_enabled=self.chk_overwrite.isChecked(),
+                    choose_action=self._ask_overwrite_action,
+                    choose_save_as=self._choose_output_path,
+                )
+                if resolved_dst is None:
+                    return
+                self.wdg_output["txt"].setText(str(resolved_dst))
+                if effective_ow:
+                    self.chk_overwrite.setChecked(True)
+                QtCore.QTimer.singleShot(0, self._run_action)
+                return
             self._msg("Operation Failed", msg, True)
 
         def _set_busy(self, busy: bool) -> None:
