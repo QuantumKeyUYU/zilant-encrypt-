@@ -2,11 +2,8 @@
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from typing import Literal
-
-logger = logging.getLogger(__name__)
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
@@ -21,6 +18,8 @@ from zilant_encrypt.errors import (
     PqSupportError,
     UnsupportedFeatureError,
 )
+
+logger = logging.getLogger(__name__)
 
 # SECURITY NOTE: WRAP_NONCE is kept for backward-compatibility when reading
 # existing containers. New containers use a fresh random wrap_nonce per volume

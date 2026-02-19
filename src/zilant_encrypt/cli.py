@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import getpass
 from pathlib import Path
-from typing import Any, Callable, Literal, cast
+from typing import Callable, Literal, cast
 
 import click
 from rich.console import Console
@@ -26,6 +26,7 @@ from zilant_encrypt.container import (
     resolve_argon_params,
 )
 from zilant_encrypt.crypto import pq
+from zilant_encrypt.crypto.keyfile import derive_keyfile_material
 from zilant_encrypt.errors import (
     ContainerFormatError,
     IntegrityError,
@@ -33,8 +34,7 @@ from zilant_encrypt.errors import (
     PqSupportError,
     UnsupportedFeatureError,
 )
-from zilant_encrypt.crypto.keyfile import derive_keyfile_material
-from zilant_encrypt.password_strength import WeakPasswordError, evaluate_password, validate_password
+from zilant_encrypt.password_strength import evaluate_password
 
 EXIT_SUCCESS = 0
 EXIT_USAGE = 1

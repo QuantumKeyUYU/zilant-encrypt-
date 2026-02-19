@@ -9,8 +9,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
-logger = logging.getLogger(__name__)
-
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -70,6 +68,8 @@ from zilant_encrypt.errors import (
     PqSupportError,
     UnsupportedFeatureError,
 )
+
+logger = logging.getLogger(__name__)
 
 ModeLiteral = Literal["password", "pq-hybrid"]
 
