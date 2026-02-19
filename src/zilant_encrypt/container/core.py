@@ -156,41 +156,54 @@ def _decrypt_volume(
                 parallelism=decrypt_params.parallelism,
             )
         )
+        # kem_secret and shared_secret are mutable bytearrays so we can
+        # zeroize them.  bytes objects returned by the library are converted
+        # immediately; the original reference is deleted to minimize the
+        # window during which raw key material sits in the Python heap.
+        kem_secret_ba: bytearray | None = None
+        shared_secret_ba: bytearray | None = None
+        master_key: bytearray | None = None
         try:
-            kem_secret = AesGcmEncryptor.decrypt(
-                bytes(password_key),  # cast to bytes for library call
-                WRAP_NONCE,
-                descriptor.pq_wrapped_secret,
-                descriptor.pq_wrapped_secret_tag,
-                b"",
+            try:
+                raw_kem = AesGcmEncryptor.decrypt(
+                    bytes(password_key),
+                    WRAP_NONCE,
+                    descriptor.pq_wrapped_secret,
+                    descriptor.pq_wrapped_secret_tag,
+                    b"",
+                )
+            except InvalidTag as exc:
+                raise InvalidPassword("Unable to unwrap KEM secret key") from exc
+
+            kem_secret_ba = bytearray(raw_kem)
+            del raw_kem
+
+            raw_shared = pq.decapsulate(descriptor.pq_ciphertext, bytes(kem_secret_ba))
+            shared_secret_ba = bytearray(raw_shared)
+            del raw_shared
+
+            hkdf = HKDF(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=descriptor.salt_argon2,
+                info=b"zilant-pq-hybrid",
             )
-        except InvalidTag as exc:
-            _zeroize(password_key)
-            raise InvalidPassword("Unable to unwrap KEM secret key") from exc
+            master_key = bytearray(hkdf.derive(bytes(shared_secret_ba) + bytes(password_key)))
 
-        shared_secret = pq.decapsulate(descriptor.pq_ciphertext, kem_secret)
-        hkdf = HKDF(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=descriptor.salt_argon2,
-            info=b"zilant-pq-hybrid",
-        )
-
-        # Convert derived master key to mutable bytearray immediately for zeroization
-        master_key = bytearray(hkdf.derive(shared_secret + password_key))
-
-        try:
-            return AesGcmEncryptor.decrypt(
-                bytes(master_key),  # cast to bytes for library call
-                WRAP_NONCE,
-                descriptor.wrapped_key,
-                descriptor.wrapped_key_tag,
-                b"",
-            )
-        except InvalidTag as exc:
-            raise InvalidPassword("Unable to unwrap file key") from exc
+            try:
+                return AesGcmEncryptor.decrypt(
+                    bytes(master_key),
+                    WRAP_NONCE,
+                    descriptor.wrapped_key,
+                    descriptor.wrapped_key_tag,
+                    b"",
+                )
+            except InvalidTag as exc:
+                raise InvalidPassword("Unable to unwrap file key") from exc
         finally:
             _zeroize(password_key)
+            _zeroize(kem_secret_ba)
+            _zeroize(shared_secret_ba)
             _zeroize(master_key)
 
     raise UnsupportedFeatureError("Unsupported key mode")
@@ -243,47 +256,55 @@ def build_volume_descriptor(
         if not pq.available():
             raise PqSupportError("PQ-hybrid mode is not available (oqs not installed)")
 
-        if pq_artifacts is None:
-            public_key, secret_key = pq.generate_kem_keypair()
-            kem_ciphertext, shared_secret = pq.encapsulate(public_key)
-        else:
-            public_key, secret_key, kem_ciphertext, shared_secret = pq_artifacts
-            del public_key
-
-        password_key = bytearray(
-            derive_key_from_password(
-                password,
-                salt,
-                mem_cost=argon_params.mem_cost_kib,
-                time_cost=argon_params.time_cost,
-                parallelism=argon_params.parallelism,
-            )
-        )
-
-        hkdf = HKDF(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=salt,
-            info=b"zilant-pq-hybrid",
-        )
-
-        # Store as mutable bytearray for subsequent zeroization
-        master_key = bytearray(hkdf.derive(shared_secret + password_key))
+        # All intermediates are converted to mutable bytearrays immediately
+        # so _zeroize() can clear them before they are garbage-collected.
+        secret_key_ba: bytearray | None = None
+        shared_secret_ba: bytearray | None = None
+        password_key: bytearray | None = None
+        master_key: bytearray | None = None
 
         try:
+            if pq_artifacts is None:
+                public_key, raw_secret_key = pq.generate_kem_keypair()
+                raw_kem_ct, raw_shared = pq.encapsulate(public_key)
+                del public_key
+                kem_ciphertext = raw_kem_ct
+            else:
+                pub, raw_secret_key, kem_ciphertext, raw_shared = pq_artifacts
+                del pub
+
+            secret_key_ba = bytearray(raw_secret_key)
+            del raw_secret_key
+            shared_secret_ba = bytearray(raw_shared)
+            del raw_shared
+
+            password_key = bytearray(
+                derive_key_from_password(
+                    password,
+                    salt,
+                    mem_cost=argon_params.mem_cost_kib,
+                    time_cost=argon_params.time_cost,
+                    parallelism=argon_params.parallelism,
+                )
+            )
+
+            hkdf = HKDF(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=salt,
+                info=b"zilant-pq-hybrid",
+            )
+            master_key = bytearray(hkdf.derive(bytes(shared_secret_ba) + bytes(password_key)))
+
             wrapped_key_data, wrapped_key_tag = AesGcmEncryptor.encrypt(
-                bytes(master_key),  # cast to bytes
-                WRAP_NONCE,
-                file_key,
-                b""
+                bytes(master_key), WRAP_NONCE, file_key, b""
             )
             wrapped_secret, wrapped_secret_tag = AesGcmEncryptor.encrypt(
-                bytes(password_key),  # cast to bytes
-                WRAP_NONCE,
-                secret_key,
-                b""
+                bytes(password_key), WRAP_NONCE, bytes(secret_key_ba), b""
             )
         finally:
+            _zeroize(secret_key_ba)
+            _zeroize(shared_secret_ba)
             _zeroize(password_key)
             _zeroize(master_key)
 
@@ -349,22 +370,25 @@ def check_container(
     with Path(container_path).open("rb") as f:
         for desc in selected:
             file_key = _derive_file_key(desc, password, resolved_mode)
-            layout = next(
-                (layout for layout in overview.layouts if layout.descriptor.volume_index == desc.volume_index),
-                None,
-            )
-            if layout is None:
-                raise ContainerFormatError("Missing layout information for volume")
-            f.seek(desc.payload_offset)
-            _decrypt_stream(
-                f,
-                _NullWriter(),
-                file_key,
-                desc.nonce_aes_gcm,
-                overview.header_bytes,
-                layout.ciphertext_len,
-            )
-            validated.append(desc.volume_index)
+            try:
+                layout = next(
+                    (layout for layout in overview.layouts if layout.descriptor.volume_index == desc.volume_index),
+                    None,
+                )
+                if layout is None:
+                    raise ContainerFormatError("Missing layout information for volume")
+                f.seek(desc.payload_offset)
+                _decrypt_stream(
+                    f,
+                    _NullWriter(),
+                    file_key,
+                    desc.nonce_aes_gcm,
+                    overview.header_bytes,
+                    layout.ciphertext_len,
+                )
+                validated.append(desc.volume_index)
+            finally:
+                del file_key
 
     return overview, validated
 
@@ -402,7 +426,7 @@ def encrypt_file(
             "Adding a decoy volume requires rebuilding the container with encrypt_with_decoy to preserve header integrity",
         )
 
-    logger.info("Encrypting %s -> %s (mode=%s)", in_path, out_path, resolved_mode or "auto")
+    logger.debug("Encrypting %s -> %s (mode=%s)", in_path, out_path, resolved_mode or "auto")
 
     salt = os.urandom(16)
     nonce = os.urandom(12)
@@ -421,64 +445,71 @@ def encrypt_file(
         keyfile_material=keyfile_material,
     )
 
-    with _PayloadSource(in_path) as payload_source:
-        payload_header = _build_payload_header(payload_source.meta)
-        plaintext_len = len(payload_header) + payload_source.path.stat().st_size
+    try:
+        with _PayloadSource(in_path) as payload_source:
+            payload_header = _build_payload_header(payload_source.meta)
+            plaintext_len = len(payload_header) + payload_source.path.stat().st_size
 
-        descriptor = replace(
-            descriptor,
-            payload_length=plaintext_len,
-        )
+            descriptor = replace(
+                descriptor,
+                payload_length=plaintext_len,
+            )
 
-        temp_header = build_header(
-            key_mode=descriptor.key_mode,
-            header_flags=descriptor.flags,
-            salt_argon2=descriptor.salt_argon2,
-            argon_mem_cost=descriptor.argon_mem_cost,
-            argon_time_cost=descriptor.argon_time_cost,
-            argon_parallelism=descriptor.argon_parallelism,
-            nonce_aes_gcm=descriptor.nonce_aes_gcm,
-            wrapped_key=descriptor.wrapped_key,
-            wrapped_key_tag=descriptor.wrapped_key_tag,
-            reserved=descriptor.reserved,
-            version=VERSION_V3,
-            pq_ciphertext=descriptor.pq_ciphertext,
-            pq_wrapped_secret=descriptor.pq_wrapped_secret,
-            pq_wrapped_secret_tag=descriptor.pq_wrapped_secret_tag,
-            volume_descriptors=[descriptor],
-            common_meta={},
-        )
+            temp_header = build_header(
+                key_mode=descriptor.key_mode,
+                header_flags=descriptor.flags,
+                salt_argon2=descriptor.salt_argon2,
+                argon_mem_cost=descriptor.argon_mem_cost,
+                argon_time_cost=descriptor.argon_time_cost,
+                argon_parallelism=descriptor.argon_parallelism,
+                nonce_aes_gcm=descriptor.nonce_aes_gcm,
+                wrapped_key=descriptor.wrapped_key,
+                wrapped_key_tag=descriptor.wrapped_key_tag,
+                reserved=descriptor.reserved,
+                version=VERSION_V3,
+                pq_ciphertext=descriptor.pq_ciphertext,
+                pq_wrapped_secret=descriptor.pq_wrapped_secret,
+                pq_wrapped_secret_tag=descriptor.pq_wrapped_secret_tag,
+                volume_descriptors=[descriptor],
+                common_meta={},
+            )
 
-        descriptor = replace(descriptor, payload_offset=len(temp_header))
+            descriptor = replace(descriptor, payload_offset=len(temp_header))
 
-        header_bytes = build_header(
-            key_mode=descriptor.key_mode,
-            header_flags=descriptor.flags,
-            salt_argon2=descriptor.salt_argon2,
-            argon_mem_cost=descriptor.argon_mem_cost,
-            argon_time_cost=descriptor.argon_time_cost,
-            argon_parallelism=descriptor.argon_parallelism,
-            nonce_aes_gcm=descriptor.nonce_aes_gcm,
-            wrapped_key=descriptor.wrapped_key,
-            wrapped_key_tag=descriptor.wrapped_key_tag,
-            reserved=descriptor.reserved,
-            version=VERSION_V3,
-            pq_ciphertext=descriptor.pq_ciphertext,
-            pq_wrapped_secret=descriptor.pq_wrapped_secret,
-            pq_wrapped_secret_tag=descriptor.pq_wrapped_secret_tag,
-            volume_descriptors=[descriptor],
-            common_meta={},
-        )
+            header_bytes = build_header(
+                key_mode=descriptor.key_mode,
+                header_flags=descriptor.flags,
+                salt_argon2=descriptor.salt_argon2,
+                argon_mem_cost=descriptor.argon_mem_cost,
+                argon_time_cost=descriptor.argon_time_cost,
+                argon_parallelism=descriptor.argon_parallelism,
+                nonce_aes_gcm=descriptor.nonce_aes_gcm,
+                wrapped_key=descriptor.wrapped_key,
+                wrapped_key_tag=descriptor.wrapped_key_tag,
+                reserved=descriptor.reserved,
+                version=VERSION_V3,
+                pq_ciphertext=descriptor.pq_ciphertext,
+                pq_wrapped_secret=descriptor.pq_wrapped_secret,
+                pq_wrapped_secret_tag=descriptor.pq_wrapped_secret_tag,
+                volume_descriptors=[descriptor],
+                common_meta={},
+            )
 
-        aad = header_bytes
-        with out_path.open("xb") as dest:
-            dest.write(header_bytes)
-            with payload_source.path.open("rb") as payload_file:
-                tag = _encrypt_stream(
-                    payload_file, dest, file_key, nonce, aad,
-                    initial=payload_header, progress_callback=progress_callback,
-                )
-                dest.write(tag)
+            aad = header_bytes
+            with out_path.open("xb") as dest:
+                dest.write(header_bytes)
+                with payload_source.path.open("rb") as payload_file:
+                    tag = _encrypt_stream(
+                        payload_file, dest, file_key, nonce, aad,
+                        initial=payload_header, progress_callback=progress_callback,
+                    )
+                    dest.write(tag)
+    finally:
+        # Reduce the window during which the plaintext file key is
+        # reachable on the Python heap.  bytes objects are immutable and
+        # cannot be truly zeroed, but removing the reference allows GC to
+        # reclaim and potentially overwrite the allocation sooner.
+        del file_key
 
 
 def encrypt_with_decoy(
@@ -602,29 +633,33 @@ def encrypt_with_decoy(
         )
 
         aad = header_bytes
-        with out_path.open("xb") as dest:
-            dest.write(header_bytes)
-            with main_payload.path.open("rb") as payload_file:
-                tag = _encrypt_stream(
-                    payload_file,
-                    dest,
-                    main_file_key,
-                    descriptors[0].nonce_aes_gcm,
-                    aad,
-                    initial=main_header,
-                )
-                dest.write(tag)
+        try:
+            with out_path.open("xb") as dest:
+                dest.write(header_bytes)
+                with main_payload.path.open("rb") as payload_file:
+                    tag = _encrypt_stream(
+                        payload_file,
+                        dest,
+                        main_file_key,
+                        descriptors[0].nonce_aes_gcm,
+                        aad,
+                        initial=main_header,
+                    )
+                    dest.write(tag)
 
-            with decoy_payload.path.open("rb") as payload_file:
-                tag = _encrypt_stream(
-                    payload_file,
-                    dest,
-                    decoy_file_key,
-                    descriptors[1].nonce_aes_gcm,
-                    aad,
-                    initial=decoy_header,
-                )
-                dest.write(tag)
+                with decoy_payload.path.open("rb") as payload_file:
+                    tag = _encrypt_stream(
+                        payload_file,
+                        dest,
+                        decoy_file_key,
+                        descriptors[1].nonce_aes_gcm,
+                        aad,
+                        initial=decoy_header,
+                    )
+                    dest.write(tag)
+        finally:
+            del main_file_key
+            del decoy_file_key
 
 
 def decrypt_file(
@@ -639,7 +674,7 @@ def decrypt_file(
     keyfile_material: bytes | None = None,
 ) -> None:
     """Decrypt a container to an output file."""
-    logger.info("Decrypting %s -> %s (volume=%s)", container_path, out_path, volume_selector)
+    logger.debug("Decrypting %s -> %s (volume=%s)", container_path, out_path, volume_selector)
     if not container_path.exists():
         raise FileNotFoundError(container_path)
 
@@ -668,18 +703,20 @@ def decrypt_file(
             raise ContainerFormatError("Invalid payload length")
 
         file_key = _decrypt_volume(descriptor, password, resolved_mode=resolved_mode, keyfile_material=keyfile_material)
-
-        writer = _PayloadWriter(out_path)
-        f.seek(descriptor.payload_offset)
-        _decrypt_stream(
-            f,
-            writer,
-            file_key,
-            descriptor.nonce_aes_gcm,
-            aad,
-            ciphertext_len,
-            progress_callback=progress_callback,
-        )
+        try:
+            writer = _PayloadWriter(out_path)
+            f.seek(descriptor.payload_offset)
+            _decrypt_stream(
+                f,
+                writer,
+                file_key,
+                descriptor.nonce_aes_gcm,
+                aad,
+                ciphertext_len,
+                progress_callback=progress_callback,
+            )
+        finally:
+            del file_key
 
 
 def decrypt_auto_volume(
@@ -723,6 +760,7 @@ def decrypt_auto_volume(
             if ciphertext_len < 0:
                 raise ContainerFormatError("Invalid payload length")
 
+            file_key = None
             try:
                 file_key = _decrypt_volume(descriptor, password, resolved_mode=resolved_mode)
 
@@ -752,6 +790,8 @@ def decrypt_auto_volume(
 
             except (InvalidPassword, IntegrityError):
                 continue
+            finally:
+                del file_key
 
         if successful is None:
             raise InvalidPassword("Unable to decrypt any volume with the provided password")
